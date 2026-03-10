@@ -1,0 +1,65 @@
+{
+    "agent": {
+        "id": null,
+        "name": "horus-agent-01",
+        "version": "0.1.0"
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "enrollment_port": 5001,
+        "ingestion_port": 5001
+    },
+    "fim": {
+        "enabled": true,
+        "paths": [
+            "/etc/passwd",
+            "/etc/shadow",
+            "/etc/hosts"
+        ],
+        "exclude_patterns": [
+            "*.log",
+            "*.tmp",
+            "*.swp",
+            "*~"
+        ],
+        "check_interval_seconds": 300,
+        "create_baseline_on_start": true
+    },
+    "log_collection": {
+        "enabled": true,
+        "poll_interval_seconds": 1.0,
+        "sources": {
+            "linux": [
+                "/var/log/auth.log",
+                "/var/log/syslog",
+                "/var/log/secure"
+            ],
+            "docker": {
+                "containers": []
+            }
+        }
+    },
+    "syscollector": {
+        "enabled": true,
+        "interval_seconds": 300,
+        "collect_processes": true,
+        "collect_hardware": true,
+        "collect_packages": true,
+        "collect_ports": true
+    },
+    "active_response": {
+        "enabled": true,
+        "poll_interval_seconds": 10,
+        "allowed_actions": [
+            "block_ip",
+            "kill_process"
+        ]
+    },
+    "credentials_path": "./data/agent_keys.enc",
+    "logging": {
+        "level": "INFO",
+        "file": "./logs/agent.log",
+        "max_size_mb": 10,
+        "backup_count": 5
+    }
+}

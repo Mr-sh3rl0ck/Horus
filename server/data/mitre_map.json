@@ -1,0 +1,191 @@
+{
+    "SSH-001": {
+        "tactic": [
+            "Credential Access"
+        ],
+        "technique": [
+            "T1110 - Brute Force"
+        ],
+        "technique_id": [
+            "T1110"
+        ],
+        "description": "Adversaries may use brute force techniques to gain access to accounts.",
+        "url": "https://attack.mitre.org/techniques/T1110/"
+    },
+    "SSH-002": {
+        "tactic": [
+            "Initial Access"
+        ],
+        "technique": [
+            "T1078 - Valid Accounts"
+        ],
+        "technique_id": [
+            "T1078"
+        ],
+        "description": "Adversaries may obtain and abuse credentials of existing accounts.",
+        "url": "https://attack.mitre.org/techniques/T1078/"
+    },
+    "SSH-003": {
+        "tactic": [
+            "Credential Access"
+        ],
+        "technique": [
+            "T1110.001 - Password Guessing"
+        ],
+        "technique_id": [
+            "T1110.001"
+        ],
+        "description": "Adversaries may guess passwords to attempt access to an account.",
+        "url": "https://attack.mitre.org/techniques/T1110/001/"
+    },
+    "FIM-001": {
+        "tactic": [
+            "Defense Evasion",
+            "Impact"
+        ],
+        "technique": [
+            "T1565 - Data Manipulation"
+        ],
+        "technique_id": [
+            "T1565"
+        ],
+        "description": "Adversaries may manipulate data to affect business decisions or processes.",
+        "url": "https://attack.mitre.org/techniques/T1565/"
+    },
+    "FIM-002": {
+        "tactic": [
+            "Impact"
+        ],
+        "technique": [
+            "T1485 - Data Destruction"
+        ],
+        "technique_id": [
+            "T1485"
+        ],
+        "description": "Adversaries may destroy data and files on specific systems or network.",
+        "url": "https://attack.mitre.org/techniques/T1485/"
+    },
+    "FIM-003": {
+        "tactic": [
+            "Persistence"
+        ],
+        "technique": [
+            "T1105 - Ingress Tool Transfer"
+        ],
+        "technique_id": [
+            "T1105"
+        ],
+        "description": "Adversaries may transfer tools or files from external systems into a compromised environment.",
+        "url": "https://attack.mitre.org/techniques/T1105/"
+    },
+    "COR-001": {
+        "tactic": [
+            "Credential Access"
+        ],
+        "technique": [
+            "T1110 - Brute Force"
+        ],
+        "technique_id": [
+            "T1110"
+        ],
+        "description": "Multiple failed login attempts indicating a brute force attack.",
+        "url": "https://attack.mitre.org/techniques/T1110/"
+    },
+    "COR-002": {
+        "tactic": [
+            "Credential Access",
+            "Discovery"
+        ],
+        "technique": [
+            "T1110.001 - Password Guessing"
+        ],
+        "technique_id": [
+            "T1110.001"
+        ],
+        "description": "Multiple login attempts with invalid usernames from the same source.",
+        "url": "https://attack.mitre.org/techniques/T1110/001/"
+    },
+    "COR-003": {
+        "tactic": [
+            "Impact"
+        ],
+        "technique": [
+            "T1485 - Data Destruction"
+        ],
+        "technique_id": [
+            "T1485"
+        ],
+        "description": "Rapid file changes suggesting data destruction or ransomware activity.",
+        "url": "https://attack.mitre.org/techniques/T1485/"
+    },
+    "SUDO-001": {
+        "tactic": [
+            "Privilege Escalation"
+        ],
+        "technique": [
+            "T1548.003 - Sudo and Sudo Caching"
+        ],
+        "technique_id": [
+            "T1548.003"
+        ],
+        "description": "Adversaries may abuse sudo to gain elevated privileges.",
+        "url": "https://attack.mitre.org/techniques/T1548/003/"
+    },
+    "SUDO-002": {
+        "tactic": [
+            "Privilege Escalation"
+        ],
+        "technique": [
+            "T1548.003 - Sudo and Sudo Caching"
+        ],
+        "technique_id": [
+            "T1548.003"
+        ],
+        "description": "Unauthorized sudo attempt detected.",
+        "url": "https://attack.mitre.org/techniques/T1548/003/"
+    },
+    "action:failed_login": {
+        "tactic": [
+            "Credential Access"
+        ],
+        "technique": [
+            "T1110 - Brute Force"
+        ],
+        "technique_id": [
+            "T1110"
+        ]
+    },
+    "action:successful_login": {
+        "tactic": [
+            "Initial Access"
+        ],
+        "technique": [
+            "T1078 - Valid Accounts"
+        ],
+        "technique_id": [
+            "T1078"
+        ]
+    },
+    "action:modified": {
+        "tactic": [
+            "Defense Evasion"
+        ],
+        "technique": [
+            "T1565 - Data Manipulation"
+        ],
+        "technique_id": [
+            "T1565"
+        ]
+    },
+    "action:deleted": {
+        "tactic": [
+            "Impact"
+        ],
+        "technique": [
+            "T1485 - Data Destruction"
+        ],
+        "technique_id": [
+            "T1485"
+        ]
+    }
+}

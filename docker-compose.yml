@@ -1,0 +1,63 @@
+# ============================================================
+# Horus SIEM — Docker Compose
+# Services: redis, server (FastAPI), dashboard (Next.js)
+# ============================================================
+
+services:
+  # ---- Redis (message queue / cache) ----
+  redis:
+    image: redis:7-alpine
+    container_name: horus-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - horus-net
+
+  # ---- Server (FastAPI backend) ----
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: horus-server
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - horus-net
+
+  # ---- Dashboard (Next.js frontend) ----
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: horus-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    environment:
+      - NODE_ENV=production
+    networks:
+      - horus-net
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  horus-net:
+    driver: bridge

@@ -1,0 +1,35 @@
+# Horus SIEM Server Configuration — Docker
+# This config is copied as config.yaml inside the container.
+# Main difference: redis.host = "redis" (Docker service name)
+
+server:
+  host: "0.0.0.0"
+  port: 5001
+  enrollment_port: 5000
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
+    - "http://dashboard:3000"
+
+redis:
+  host: "redis"
+  port: 6379
+  db: 0
+  event_queue_key: "horus:events"
+  max_queue_size: 10000
+
+auth:
+  psk: "horus-default-psk"
+
+analysis:
+  rules_path: "./rules/default_rules.yaml"
+  mitre_map_path: "./data/mitre_map.json"
+
+storage:
+  alerts_db_path: "./data/alerts.db"
+  cold_storage_path: "./data/cold_storage"
+  cold_storage_retention_days: 90
+
+workers:
+  count: 2
+  batch_size: 10

@@ -1,0 +1,102 @@
+# Horus SIEM - Default Detection Rules
+# Each rule defines conditions that, when matched, generate an alert.
+
+rules:
+  # --- SSH / Authentication ---
+  - id: "SSH-001"
+    name: "SSH Failed Login Attempt"
+    description: "A failed SSH login attempt was detected"
+    level: 5
+    event_type: "log"
+    conditions:
+      action: "failed_login"
+    mitre:
+      tactic: ["Credential Access"]
+      technique: ["T1110 - Brute Force"]
+    active: true
+
+  - id: "SSH-002"
+    name: "SSH Successful Login"
+    description: "A successful SSH login was detected"
+    level: 3
+    event_type: "log"
+    conditions:
+      action: "successful_login"
+    mitre:
+      tactic: ["Initial Access"]
+      technique: ["T1078 - Valid Accounts"]
+    active: true
+
+  - id: "SSH-003"
+    name: "SSH Invalid User Attempt"
+    description: "Login attempt with a non-existent username"
+    level: 7
+    event_type: "log"
+    conditions:
+      action: "invalid_user"
+    mitre:
+      tactic: ["Credential Access"]
+      technique: ["T1110.001 - Password Guessing"]
+    active: true
+
+  # --- FIM ---
+  - id: "FIM-001"
+    name: "Critical File Modified"
+    description: "A monitored file was modified"
+    level: 8
+    event_type: "fim"
+    conditions:
+      action: "modified"
+    mitre:
+      tactic: ["Defense Evasion", "Impact"]
+      technique: ["T1565 - Data Manipulation"]
+    active: true
+
+  - id: "FIM-002"
+    name: "Critical File Deleted"
+    description: "A monitored file was deleted"
+    level: 10
+    event_type: "fim"
+    conditions:
+      action: "deleted"
+    mitre:
+      tactic: ["Impact"]
+      technique: ["T1485 - Data Destruction"]
+    active: true
+
+  - id: "FIM-003"
+    name: "New File Created in Monitored Path"
+    description: "A new file was created in a monitored directory"
+    level: 5
+    event_type: "fim"
+    conditions:
+      action: "created"
+    mitre:
+      tactic: ["Persistence"]
+      technique: ["T1105 - Ingress Tool Transfer"]
+    active: true
+
+  # --- Sudo ---
+  - id: "SUDO-001"
+    name: "Sudo Command Executed"
+    description: "A command was executed with sudo privileges"
+    level: 4
+    event_type: "log"
+    conditions:
+      action: "sudo_command"
+    mitre:
+      tactic: ["Privilege Escalation"]
+      technique: ["T1548.003 - Sudo and Sudo Caching"]
+    active: true
+
+  - id: "SUDO-002"
+    name: "Sudo Command Denied"
+    description: "A sudo command was attempted but denied"
+    level: 9
+    event_type: "log"
+    conditions:
+      action: "sudo_failed"
+    mitre:
+      tactic: ["Privilege Escalation"]
+      technique: ["T1548.003 - Sudo and Sudo Caching"]
+    active: true
