@@ -15,6 +15,10 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Next.js inlines NEXT_PUBLIC_* at build time
+ARG NEXT_PUBLIC_API_URL=http://localhost:5001/api
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 # Build Next.js in standalone mode
 RUN npm run build
 

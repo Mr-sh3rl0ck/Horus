@@ -35,6 +35,8 @@ services:
         condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=Horus2026!
     networks:
       - horus-net
 
@@ -43,6 +45,8 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:5001/api
     container_name: horus-dashboard
     restart: unless-stopped
     ports:

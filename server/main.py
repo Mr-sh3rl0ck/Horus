@@ -18,6 +18,7 @@ from api.dashboard import router as dashboard_router
 from api.auth import router as auth_router, generate_admin_credentials
 from engine.worker import AnalysisWorker
 from services.alert_store import AlertStore
+from services.cold_storage import ColdStorageManager
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -70,12 +71,13 @@ def get_redis_client() -> redis.Redis:
 workers: list = []
 alert_store: AlertStore = None
 redis_client: redis.Redis = None
+cold_storage: ColdStorageManager = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
-    global workers, alert_store, redis_client
+    global workers, alert_store, redis_client, cold_storage
 
     logger.info("=" * 60)
     logger.info("Horus SIEM Server iniciando...")
@@ -115,6 +117,16 @@ async def lifespan(app: FastAPI):
         workers.append(w)
     logger.info(f"{worker_count} worker(s) de análisis iniciados")
 
+    # Cold Storage
+    storage_config = CONFIG.get("storage", {})
+    cold_storage = ColdStorageManager(
+        alert_store=alert_store,
+        cold_storage_path=storage_config.get("cold_storage_path", "./data/cold_storage"),
+        retention_days=storage_config.get("cold_storage_retention_days", 90),
+    )
+    cold_storage.start()
+    logger.info("Cold Storage Manager iniciado")
+
     # Generate admin credentials
     admin_password = generate_admin_credentials()
     logger.info("=" * 60)
@@ -132,6 +144,9 @@ async def lifespan(app: FastAPI):
     for w in workers:
         w.stop()
     workers.clear()
+
+    if cold_storage:
+        cold_storage.stop()
 
     if redis_client:
         redis_client.close()

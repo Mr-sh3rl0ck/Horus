@@ -10,6 +10,7 @@ import { FIMPage } from "@/components/dashboard/pages/fim-page"
 import { VulnerabilitiesPage } from "@/components/dashboard/pages/vulnerabilities-page"
 import { ThreatsPage } from "@/components/dashboard/pages/threats-page"
 import { SyscollectorPage } from "@/components/dashboard/pages/syscollector-page"
+import { API_BASE } from "@/lib/api"
 
 const pageConfig: Record<string, { title: string; breadcrumbs: { label: string }[] }> = {
     overview: {
@@ -49,7 +50,7 @@ export default function SecurityDashboard() {
         const token = localStorage.getItem("horus_token")
         if (token) {
             // Verify the token is still valid
-            fetch("http://172.21.89.249:5001/api/auth/verify", {
+            fetch(`${API_BASE}/auth/verify`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -82,7 +83,7 @@ export default function SecurityDashboard() {
     const handleLogout = () => {
         const token = localStorage.getItem("horus_token")
         if (token) {
-            fetch("http://172.21.89.249:5001/api/auth/logout", {
+            fetch(`${API_BASE}/auth/logout`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}` },
             }).catch(() => { })

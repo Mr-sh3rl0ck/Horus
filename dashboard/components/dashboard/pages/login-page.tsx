@@ -2,6 +2,7 @@
 
 import { useState, FormEvent } from "react"
 import { Shield, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react"
+import { API_BASE } from "@/lib/api"
 
 interface LoginPageProps {
     onLogin: (token: string) => void
@@ -20,7 +21,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         setLoading(true)
 
         try {
-            const response = await fetch("http://172.21.89.249:5001/api/auth/login", {
+            const response = await fetch(`${API_BASE}/auth/login`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username, password }),

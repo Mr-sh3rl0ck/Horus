@@ -1,7 +1,7 @@
 // Horus SIEM Dashboard - API Service
 // HTTP client for server communication
 
-const API_BASE = 'http://172.21.89.249:5001/api';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 
 async function request(endpoint: string, options: RequestInit = {}) {
     try {

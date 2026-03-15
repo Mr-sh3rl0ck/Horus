@@ -1,6 +1,7 @@
 # Horus SIEM Server - Authentication API
 # Simple token-based auth with admin credentials generated at startup
 
+import os
 import time
 import uuid
 import hashlib
@@ -21,14 +22,18 @@ security = HTTPBearer(auto_error=False)
 _sessions: Dict[str, dict] = {}
 
 # Admin credentials (set at startup)
-ADMIN_USER = "admin"
-ADMIN_PASSWORD = ""  # Generated at startup
+ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
+ADMIN_PASSWORD = ""  # Set at startup
 
 
 def generate_admin_credentials() -> str:
-    """Generate a random admin password and return it."""
+    """Generate admin password. Uses ADMIN_PASSWORD env var if set, otherwise random."""
     global ADMIN_PASSWORD
-    ADMIN_PASSWORD = secrets.token_urlsafe(12)
+    env_password = os.environ.get("ADMIN_PASSWORD", "")
+    if env_password:
+        ADMIN_PASSWORD = env_password
+    else:
+        ADMIN_PASSWORD = secrets.token_urlsafe(12)
     return ADMIN_PASSWORD
 
 

@@ -11,6 +11,7 @@ from engine.decoder import decode_event
 from engine.rules import RulesEngine
 from engine.correlator import CorrelationEngine
 from engine.mitre import MitreEnricher
+from services.vuln_manager import VulnerabilityManager
 
 logger = logging.getLogger("horus.server.worker")
 
@@ -39,6 +40,7 @@ class AnalysisWorker:
         self.mitre_enricher = MitreEnricher(
             mitre_map_path=analysis_config.get("mitre_map_path")
         )
+        self.vuln_manager = VulnerabilityManager()
 
         self.queue_key = config.get("redis", {}).get("event_queue_key", "horus:events")
         self.batch_size = config.get("workers", {}).get("batch_size", 10)
@@ -55,8 +57,13 @@ class AnalysisWorker:
             # Step 3: Correlation
             corr_alerts = self.correlator.correlate(event)
 
+            # Step 3.5: Vulnerability check for syscollector events
+            vuln_alerts = []
+            if event.get("type") == "syscollector":
+                vuln_alerts = self.vuln_manager.check_inventory(event)
+
             # Step 4: Enrich + Store all alerts
-            all_alerts = rule_alerts + corr_alerts
+            all_alerts = rule_alerts + corr_alerts + vuln_alerts
 
             for alert in all_alerts:
                 # MITRE enrichment
