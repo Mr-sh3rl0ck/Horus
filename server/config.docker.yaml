@@ -33,3 +33,22 @@ storage:
 workers:
   count: 2
   batch_size: 10
+
+# ---------------------------------------------------------------------------
+# Firebase Cloud Messaging (Push Notifications)
+# ---------------------------------------------------------------------------
+# TODO (dev-mobile): En Docker, monta el serviceAccountKey.json como volumen:
+#   volumes:
+#     - ./serviceAccountKey.json:/app/serviceAccountKey.json:ro
+# Luego cambia enabled a true y pon tu project_id real.
+firebase:
+  enabled: false
+  service_account_key: "./serviceAccountKey.json"
+  project_id: "YOUR_FIREBASE_PROJECT_ID"
+
+push:
+  min_level: 8
+  platforms:
+    - android
+  notification_title: "⚠️ Alerta Horus [{level}]"
+  notification_body: "{rule_name} — Agente: {agent_id}"

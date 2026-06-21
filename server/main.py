@@ -16,9 +16,11 @@ from api.enrollment import router as enrollment_router
 from api.ingestion import router as ingestion_router
 from api.dashboard import router as dashboard_router
 from api.auth import router as auth_router, generate_admin_credentials
+from api.mobile import router as mobile_router
 from engine.worker import AnalysisWorker
 from services.alert_store import AlertStore
 from services.cold_storage import ColdStorageManager
+from services.push_service import PushService
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -72,6 +74,7 @@ workers: list = []
 alert_store: AlertStore = None
 redis_client: redis.Redis = None
 cold_storage: ColdStorageManager = None
+push_service: PushService = None
 
 
 @asynccontextmanager
@@ -104,6 +107,14 @@ async def lifespan(app: FastAPI):
     app.state.agents = {}  # In-memory agent registry
     app.state.pending_commands = {}  # agent_id -> [commands]
 
+    # Push Service (Firebase Cloud Messaging)
+    global push_service
+    push_service = PushService(CONFIG)
+    app.state.push_service = push_service
+    logger.info(
+        f"PushService: {'habilitado' if push_service.is_enabled else 'deshabilitado (modo sin credenciales)'}"
+    )
+
     # Analysis workers
     worker_count = CONFIG.get("workers", {}).get("count", 2)
     for i in range(worker_count):
@@ -112,6 +123,7 @@ async def lifespan(app: FastAPI):
             config=CONFIG,
             redis_client=redis_client,
             alert_store=alert_store,
+            push_service=push_service,
         )
         w.start()
         workers.append(w)
@@ -180,6 +192,7 @@ app.include_router(auth_router, prefix="/api", tags=["Auth"])
 app.include_router(enrollment_router, prefix="/api", tags=["Enrollment"])
 app.include_router(ingestion_router, prefix="/api", tags=["Ingestion"])
 app.include_router(dashboard_router, prefix="/api", tags=["Dashboard"])
+app.include_router(mobile_router, prefix="/api", tags=["Mobile"])
 
 
 @app.get("/health")

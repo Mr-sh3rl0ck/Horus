@@ -30,3 +30,29 @@ storage:
 workers:
   count: 2
   batch_size: 10
+
+# ---------------------------------------------------------------------------
+# Firebase Cloud Messaging (Push Notifications)
+# ---------------------------------------------------------------------------
+# TODO (dev-mobile): Completa esta sección con los datos de tu proyecto Firebase.
+# 1. Ve a Firebase Console > Configuración del proyecto > Cuentas de servicio
+# 2. Genera una nueva clave privada y guarda el JSON como 'serviceAccountKey.json'
+#    en el directorio raíz del servidor (NO lo subas a Git, ya está en .gitignore)
+# 3. Copia el project_id que aparece en la consola de Firebase
+# 4. Cambia 'enabled' a true
+firebase:
+  enabled: false                          # Cambiar a true cuando tengas credenciales
+  service_account_key: "./serviceAccountKey.json"   # Ruta al JSON descargado de Firebase
+  project_id: "YOUR_FIREBASE_PROJECT_ID" # Reemplazar con tu project_id real
+
+push:
+  # Nivel mínimo de alerta que dispara una notificación push
+  # Escala Horus: 1-3=Low, 4-7=Medium, 8-11=High, 12-15=Critical
+  min_level: 8
+  # Plataformas habilitadas (android / ios)
+  # iOS requiere configuración APNs en Firebase Console
+  platforms:
+    - android
+  # Título y cuerpo de la notificación (soportan variables: {rule_name}, {agent_id}, {level})
+  notification_title: "⚠️ Alerta Horus [{level}]"
+  notification_body: "{rule_name} — Agente: {agent_id}"

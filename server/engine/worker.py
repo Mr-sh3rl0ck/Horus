@@ -19,14 +19,15 @@ logger = logging.getLogger("horus.server.worker")
 class AnalysisWorker:
     """
     Worker thread that consumes events from Redis and processes them
-    through the pipeline: Decode → Rules → Correlate → MITRE → Store.
+    through the pipeline: Decode → Rules → Correlate → MITRE → Store → Push.
     """
 
-    def __init__(self, worker_id: int, config: dict, redis_client, alert_store):
+    def __init__(self, worker_id: int, config: dict, redis_client, alert_store, push_service=None):
         self.worker_id = worker_id
         self.config = config
         self.redis_client = redis_client
         self.alert_store = alert_store
+        self.push_service = push_service  # PushService instance (puede ser None si FCM deshabilitado)
         self._stop_event = Event()
         self._thread: Optional[Thread] = None
 
@@ -70,13 +71,32 @@ class AnalysisWorker:
                 alert = self.mitre_enricher.enrich(alert)
 
                 # Store
-                self.alert_store.insert_alert(alert)
+                alert_id = self.alert_store.insert_alert(alert)
+                alert["id"] = alert_id  # Attach the generated ID to the alert dict
 
                 logger.info(
                     f"[Worker-{self.worker_id}] Alerta generada: "
                     f"[{alert.get('rule_id')}] {alert.get('rule_name')} "
                     f"(nivel {alert.get('level')})"
                 )
+
+                # Push notification (si Firebase está habilitado y el nivel es suficiente)
+                if self.push_service:
+                    try:
+                        tokens = self.alert_store.get_all_tokens()
+                        self.push_service.send_alert_notification(alert, tokens)
+
+                        # Limpiar tokens inválidos reportados por FCM
+                        invalid = self.push_service.get_and_clear_invalid_tokens()
+                        for bad_token in invalid:
+                            self.alert_store.delete_token(bad_token)
+                            logger.info(f"[Worker-{self.worker_id}] Token FCM inválido eliminado.")
+
+                    except Exception as push_err:
+                        # El push nunca debe detener el procesamiento de alertas
+                        logger.warning(
+                            f"[Worker-{self.worker_id}] Error enviando push notification: {push_err}"
+                        )
 
         except Exception as e:
             logger.error(

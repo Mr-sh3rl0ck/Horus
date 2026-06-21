@@ -88,6 +88,19 @@ class AlertStore:
             END
         """)
 
+        # -----------------------------------------------------------------------
+        # Mobile tokens table (FCM push notifications)
+        # -----------------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mobile_tokens (
+                token TEXT PRIMARY KEY,
+                platform TEXT NOT NULL DEFAULT 'android',
+                label TEXT,
+                registered_at REAL NOT NULL,
+                last_used_at REAL
+            )
+        """)
+
         conn.commit()
         logger.info(f"Alert store inicializado: {self.db_path}")
 
@@ -345,3 +358,86 @@ class AlertStore:
             d["mitre"] = {}
             d.pop("mitre_json", None)
         return d
+
+    # ---------------------------------------------------------------------------
+    # Mobile Token management (FCM push notifications)
+    # ---------------------------------------------------------------------------
+
+    def register_token(self, token: str, platform: str = "android", label: str = None) -> bool:
+        """
+        Registra o actualiza un token FCM de dispositivo móvil.
+
+        Args:
+            token: Token FCM del dispositivo (obtenido por la app al iniciar).
+            platform: 'android' o 'ios' (por ahora solo android está activo).
+            label: Etiqueta opcional para identificar el dispositivo (ej. username).
+
+        Returns:
+            True si se registró correctamente.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            INSERT INTO mobile_tokens (token, platform, label, registered_at, last_used_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(token) DO UPDATE SET
+                platform = excluded.platform,
+                label = excluded.label,
+                last_used_at = excluded.last_used_at
+        """, (token, platform, label, now, now))
+
+        conn.commit()
+        logger.info(f"Token móvil registrado: ...{token[-8:]} platform={platform} label={label}")
+        return True
+
+    def get_all_tokens(self) -> List[str]:
+        """
+        Retorna todos los tokens FCM activos registrados.
+        Usada por el worker para enviar notificaciones a todos los dispositivos.
+
+        Returns:
+            Lista de strings con los tokens FCM.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT token FROM mobile_tokens ORDER BY registered_at ASC")
+        return [row["token"] for row in cursor.fetchall()]
+
+    def get_tokens_detail(self) -> List[Dict]:
+        """
+        Retorna los tokens con todos sus metadatos (para el endpoint de administración).
+
+        Returns:
+            Lista de dicts con token, platform, label, registered_at, last_used_at.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT token, platform, label, registered_at, last_used_at
+            FROM mobile_tokens
+            ORDER BY registered_at DESC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_token(self, token: str) -> bool:
+        """
+        Elimina un token FCM. Se llama cuando:
+        - El usuario cierra sesión en la app móvil.
+        - FCM reporta que el token ya no es válido.
+
+        Args:
+            token: Token FCM a eliminar.
+
+        Returns:
+            True si se encontró y eliminó, False si no existía.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM mobile_tokens WHERE token = ?", (token,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Token móvil eliminado: ...{token[-8:]}")
+        return deleted
