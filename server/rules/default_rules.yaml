@@ -100,3 +100,15 @@ rules:
       tactic: ["Privilege Escalation"]
       technique: ["T1548.003 - Sudo and Sudo Caching"]
     active: true
+
+  - id: "SUDO-003"
+    name: "Sudo Incorrect Password"
+    description: "A sudo command failed due to incorrect password attempts"
+    level: 7
+    event_type: "log"
+    conditions:
+      action: "sudo_incorrect_password"
+    mitre:
+      tactic: ["Credential Access", "Privilege Escalation"]
+      technique: ["T1110.001 - Password Guessing", "T1548.003 - Sudo and Sudo Caching"]
+    active: true

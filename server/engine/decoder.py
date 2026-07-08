@@ -71,6 +71,14 @@ DECODERS = [
                 "fields": ["src_user", "command"],
                 "action": "sudo_failed",
             },
+            {
+                "name": "sudo_incorrect_password",
+                "regex": re.compile(
+                    r"(\S+) : \d+ incorrect password attempt[s]? ; TTY=(\S+) ; PWD=(\S+) ; USER=(\S+) ; COMMAND=(.*)"
+                ),
+                "fields": ["src_user", "tty", "pwd", "dst_user", "command"],
+                "action": "sudo_incorrect_password",
+            },
         ],
     },
     {

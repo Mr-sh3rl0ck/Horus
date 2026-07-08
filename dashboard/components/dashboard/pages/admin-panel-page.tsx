@@ -90,24 +90,15 @@ function UsersBreakdown({ users }: { users: UserRecord[] }) {
             <div className="space-y-2">
                 {roles.map((role) => {
                     const count = byRole[role] ?? 0
-                    const pct = users.length ? Math.round((count / users.length) * 100) : 0
                     return (
-                        <div key={role} className="space-y-1">
-                            <div className="flex items-center justify-between text-xs">
-                                <span className={cn(
-                                    "rounded-full border px-2 py-0 font-semibold leading-5",
-                                    getRoleBadgeClass(role)
-                                )}>
-                                    {getRoleLabel(role)}
-                                </span>
-                                <span className="text-muted-foreground">{count} usuario{count !== 1 ? "s" : ""}</span>
-                            </div>
-                            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                                <div
-                                    className="h-full rounded-full bg-sidebar-primary transition-all duration-500"
-                                    style={{ width: `${pct}%` }}
-                                />
-                            </div>
+                        <div key={role} className="flex items-center justify-between text-xs py-1">
+                            <span className={cn(
+                                "rounded-full border px-2 py-0 font-semibold leading-5",
+                                getRoleBadgeClass(role)
+                            )}>
+                                {getRoleLabel(role)}
+                            </span>
+                            <span className="text-muted-foreground font-medium">{count} usuario{count !== 1 ? "s" : ""}</span>
                         </div>
                     )
                 })}

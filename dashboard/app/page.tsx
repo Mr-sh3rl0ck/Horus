@@ -14,7 +14,9 @@ import { ThreatsPage } from "@/components/dashboard/pages/threats-page"
 import { SyscollectorPage } from "@/components/dashboard/pages/syscollector-page"
 import { UsersPage } from "@/components/dashboard/pages/users-page"
 import { AdminPanelPage } from "@/components/dashboard/pages/admin-panel-page"
-import { useState } from "react"
+import { useState, useRef } from "react"
+import { useToast } from "@/hooks/use-toast"
+import { getAlerts } from "@/lib/api"
 
 const pageConfig: Record<string, { title: string; breadcrumbs: { label: string }[] }> = {
     overview: {
@@ -54,6 +56,40 @@ const pageConfig: Record<string, { title: string; breadcrumbs: { label: string }
 export default function SecurityDashboard() {
     const { user, isAuthenticated, isLoading, login, logout } = useAuth()
     const [currentPage, setCurrentPage] = useState("overview")
+    const { toast } = useToast()
+    const lastAlertIdRef = useRef<string | null>(null)
+
+    // Global alert polling
+    useEffect(() => {
+        if (!isAuthenticated) return
+
+        const checkNewAlerts = async () => {
+            try {
+                const res = await getAlerts({ limit: 1 })
+                if (res && res.alerts && res.alerts.length > 0) {
+                    const latestAlert = res.alerts[0]
+                    const currentId = latestAlert.id?.toString() || latestAlert.timestamp?.toString()
+                    
+                    if (lastAlertIdRef.current && currentId !== lastAlertIdRef.current) {
+                        // New alert detected!
+                        const isHigh = latestAlert.level >= 7
+                        toast({
+                            title: latestAlert.rule_name || "New Security Alert",
+                            description: latestAlert.rule_description || "A new event was detected.",
+                            variant: isHigh ? "destructive" : "default",
+                            duration: 10000,
+                        })
+                    }
+                    lastAlertIdRef.current = currentId
+                }
+            } catch (err) {
+                // ignore
+            }
+        }
+
+        const interval = setInterval(checkNewAlerts, 3000)
+        return () => clearInterval(interval)
+    }, [isAuthenticated, toast])
 
     // Redirect to overview if current page is not accessible with the current role
     useEffect(() => {

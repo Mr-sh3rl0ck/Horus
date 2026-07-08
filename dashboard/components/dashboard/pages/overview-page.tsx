@@ -184,32 +184,29 @@ export function OverviewPage({ role = "viewer" }: { role?: string }) {
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <StatsCard
                     title="Total Endpoints"
-                    value={stats?.agents_total ?? 16}
-                    subtitle={`${stats?.agents_active ?? 12} active`}
+                    value={stats?.agents_total ?? 0}
+                    subtitle={`${stats?.agents_active ?? 0} active`}
                     icon={<Server className="h-5 w-5" />}
-                    trend={{ value: 12, isPositive: true }}
                 />
                 <StatsCard
                     title="Active Alerts"
-                    value={stats?.total_alerts ?? 47}
+                    value={stats?.total_alerts ?? 0}
                     subtitle="Last 24 hours"
                     icon={<AlertTriangle className="h-5 w-5" />}
-                    trend={{ value: 8, isPositive: false }}
                     variant="high"
                 />
                 <StatsCard
                     title="Critical Alerts"
                     value={stats?.critical ?? 0}
-                    subtitle={`${stats?.high ?? 2} high severity`}
+                    subtitle={`${stats?.high ?? 0} high severity`}
                     icon={<Bug className="h-5 w-5" />}
                     variant="critical"
                 />
                 <StatsCard
                     title="Compliance Score"
-                    value="87%"
+                    value={stats?.total_alerts === 0 ? "100%" : "Pending"}
                     subtitle="PCI DSS"
                     icon={<ShieldCheck className="h-5 w-5" />}
-                    trend={{ value: 5, isPositive: true }}
                     variant="success"
                 />
             </div>
