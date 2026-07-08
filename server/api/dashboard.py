@@ -4,30 +4,46 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Request, Query, Depends
+
+from api.deps import get_current_session, require_role
 
 logger = logging.getLogger("horus.server.dashboard")
 
 router = APIRouter()
 
+# Shorthand dependency aliases
+_any_auth      = Depends(get_current_session)
+_soc_or_above  = Depends(require_role("admin", "soc_analyst"))
+_admin_only    = Depends(require_role("admin"))
 
-@router.get("/alerts")
+
+@router.get("/alerts", dependencies=[_any_auth])
 async def get_alerts(
     request: Request,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     severity: Optional[int] = Query(None, ge=1, le=15),
     agent_id: Optional[str] = None,
+    type: Optional[str] = Query(None),
 ):
     """Retorna las alertas más recientes."""
     alert_store = request.app.state.alert_store
+    
+    exclude_types = None
+    if type == "threat":
+        exclude_types = ["fim", "vulnerability"]
+        
     alerts = alert_store.get_recent_alerts(
         limit=limit,
         offset=offset,
         severity=severity,
         agent_id=agent_id,
+        exclude_types=exclude_types,
     )
-    total = alert_store.get_alert_count(severity=severity, agent_id=agent_id)
+    total = alert_store.get_alert_count(
+        severity=severity, agent_id=agent_id, exclude_types=exclude_types
+    )
 
     return {
         "total": total,
@@ -37,7 +53,7 @@ async def get_alerts(
     }
 
 
-@router.get("/alerts/search")
+@router.get("/alerts/search", dependencies=[_any_auth])
 async def search_alerts(
     request: Request,
     q: str = Query(..., min_length=1),
@@ -54,7 +70,7 @@ async def search_alerts(
     }
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[_any_auth])
 async def get_stats(request: Request):
     """Estadísticas generales para el dashboard."""
     alert_store = request.app.state.alert_store
@@ -70,7 +86,7 @@ async def get_stats(request: Request):
     return stats
 
 
-@router.get("/alerts/{alert_id}")
+@router.get("/alerts/{alert_id}", dependencies=[_any_auth])
 async def get_alert_detail(request: Request, alert_id: str):
     """Retorna el detalle completo de una alerta."""
     alert_store = request.app.state.alert_store
@@ -97,7 +113,7 @@ def _compute_agent_status(agent: dict) -> dict:
     return a
 
 
-@router.get("/agents")
+@router.get("/agents", dependencies=[_soc_or_above])
 async def get_agents(request: Request):
     """Retorna la lista de agentes registrados con status calculado."""
     agents = request.app.state.agents
@@ -105,7 +121,7 @@ async def get_agents(request: Request):
     return agent_list
 
 
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", dependencies=[_soc_or_above])
 async def get_agent_detail(request: Request, agent_id: str):
     """Retorna el detalle de un agente específico."""
     agents = request.app.state.agents
@@ -115,7 +131,7 @@ async def get_agent_detail(request: Request, agent_id: str):
     return _compute_agent_status(agents[agent_id])
 
 
-@router.delete("/agents/{agent_id}")
+@router.delete("/agents/{agent_id}", dependencies=[_admin_only])
 async def delete_agent(request: Request, agent_id: str):
     """Elimina un agente del registro."""
     agents = request.app.state.agents
@@ -139,18 +155,49 @@ async def health_check(request: Request):
             redis_ok = redis_client.ping()
         except Exception:
             pass
+            
+    workers = getattr(request.app.state, "workers", [])
 
     return {
         "status": "ok",
         "redis": "connected" if redis_ok else "disconnected",
+        "workers": len(workers),
     }
+    
+class CommandRequest(BaseModel):
+    agent_id: str
+    action: str
+    params: dict = {}
+
+@router.post("/commands", dependencies=[_soc_or_above])
+async def send_command(request: Request, body: CommandRequest):
+    """Envia un comando a un agente."""
+    agents = getattr(request.app.state, "agents", {})
+    if body.agent_id not in agents:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Agente no encontrado")
+        
+    pending = getattr(request.app.state, "pending_commands", {})
+    if body.agent_id not in pending:
+        pending[body.agent_id] = []
+        
+    import uuid
+    cmd = {
+        "command_id": str(uuid.uuid4()),
+        "action": body.action,
+        "params": body.params,
+        "status": "pending"
+    }
+    pending[body.agent_id].append(cmd)
+    
+    return {"status": "enqueued", "command": cmd}
 
 
 # ---------------------------------------------------------------------------
 # FIM (File Integrity Monitoring) endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/fim/events")
+@router.get("/fim/events", dependencies=[_soc_or_above])
 async def get_fim_events(
     request: Request,
     limit: int = Query(50, ge=1, le=500),
@@ -175,7 +222,7 @@ async def get_fim_events(
     }
 
 
-@router.get("/fim/stats")
+@router.get("/fim/stats", dependencies=[_soc_or_above])
 async def get_fim_stats(request: Request):
     """Estadísticas de FIM para el dashboard."""
     alert_store = request.app.state.alert_store
@@ -186,7 +233,7 @@ async def get_fim_stats(request: Request):
 # Vulnerability Detection endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/vulnerabilities")
+@router.get("/vulnerabilities", dependencies=[_soc_or_above])
 async def get_vulnerabilities(
     request: Request,
     limit: int = Query(50, ge=1, le=500),
@@ -215,7 +262,7 @@ async def get_vulnerabilities(
     }
 
 
-@router.get("/vulnerabilities/stats")
+@router.get("/vulnerabilities/stats", dependencies=[_soc_or_above])
 async def get_vulnerability_stats(request: Request):
     """Estadísticas de vulnerabilidades para el dashboard."""
     alert_store = request.app.state.alert_store
@@ -226,7 +273,7 @@ async def get_vulnerability_stats(request: Request):
 # Syscollector (System Inventory) endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/syscollector/summary")
+@router.get("/syscollector/summary", dependencies=[_soc_or_above])
 async def get_syscollector_summary(request: Request):
     """Aggregated syscollector summary across all agents."""
     agents = request.app.state.agents
@@ -252,7 +299,7 @@ async def get_syscollector_summary(request: Request):
     }
 
 
-@router.get("/syscollector/{agent_id}")
+@router.get("/syscollector/{agent_id}", dependencies=[_soc_or_above])
 async def get_syscollector_data(request: Request, agent_id: str):
     """Full syscollector snapshot for a specific agent."""
     agents = request.app.state.agents
@@ -267,7 +314,7 @@ async def get_syscollector_data(request: Request, agent_id: str):
     return sc
 
 
-@router.get("/syscollector/{agent_id}/hardware")
+@router.get("/syscollector/{agent_id}/hardware", dependencies=[_soc_or_above])
 async def get_syscollector_hardware(request: Request, agent_id: str):
     """Hardware metrics for a specific agent."""
     agents = request.app.state.agents
@@ -283,7 +330,7 @@ async def get_syscollector_hardware(request: Request, agent_id: str):
     }
 
 
-@router.get("/syscollector/{agent_id}/processes")
+@router.get("/syscollector/{agent_id}/processes", dependencies=[_soc_or_above])
 async def get_syscollector_processes(request: Request, agent_id: str):
     """Running processes for a specific agent."""
     agents = request.app.state.agents
@@ -298,7 +345,7 @@ async def get_syscollector_processes(request: Request, agent_id: str):
     }
 
 
-@router.get("/syscollector/{agent_id}/ports")
+@router.get("/syscollector/{agent_id}/ports", dependencies=[_soc_or_above])
 async def get_syscollector_ports(request: Request, agent_id: str):
     """Open LISTEN ports for a specific agent."""
     agents = request.app.state.agents
@@ -310,7 +357,7 @@ async def get_syscollector_ports(request: Request, agent_id: str):
     return {"ports": sc.get("open_ports", [])}
 
 
-@router.get("/syscollector/{agent_id}/packages")
+@router.get("/syscollector/{agent_id}/packages", dependencies=[_soc_or_above])
 async def get_syscollector_packages(request: Request, agent_id: str):
     """Installed packages for a specific agent."""
     agents = request.app.state.agents

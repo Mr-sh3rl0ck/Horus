@@ -5,7 +5,7 @@ import { Shield, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react"
 import { API_BASE } from "@/lib/api"
 
 interface LoginPageProps {
-    onLogin: (token: string) => void
+    onLogin: (token: string, username: string, role: string) => void
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
@@ -33,9 +33,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             }
 
             const data = await response.json()
-            localStorage.setItem("horus_token", data.token)
-            localStorage.setItem("horus_user", data.username)
-            onLogin(data.token)
+            // Let AuthContext handle storage — just pass the values up
+            onLogin(data.token, data.username, data.role)
         } catch (err: any) {
             setError(err.message || "Error de conexión con el servidor")
         } finally {

@@ -102,17 +102,23 @@ async def ingest_event(request: Request, body: EventPayload):
         else:
             # Auto-register unknown agent (e.g. after server restart)
             client_ip = request.client.host if request.client else None
-            request.app.state.agents[agent_id] = {
+            new_agent = {
                 "agent_id": agent_id,
                 "name": event_data.get("agent_name", agent_id),
                 "hostname": event_data.get("hostname", agent_id),
                 "ip": client_ip,
                 "os": _extract_os(event_data),
                 "version": event_data.get("version", "0.1.0"),
+                "cluster": event_data.get("cluster", "default"),
+                "groups": event_data.get("groups", ["default"]),
                 "enrolled_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "last_seen": time.time(),
                 "status": "active",
             }
+            request.app.state.agents[agent_id] = new_agent
+            if hasattr(request.app.state, "alert_store"):
+                request.app.state.alert_store.save_agent(new_agent)
+            
             request.app.state.pending_commands[agent_id] = []
             logger.info(f"Agente auto-registrado desde evento: {agent_id} IP={client_ip}")
 
@@ -131,6 +137,10 @@ async def ingest_event(request: Request, body: EventPayload):
             request.app.state.agents[agent_id]["syscollector"] = sc_snapshot
             # Also update the agent's OS string from fresh data
             request.app.state.agents[agent_id]["os"] = _extract_os(event_data)
+            
+            if hasattr(request.app.state, "alert_store"):
+                request.app.state.alert_store.save_agent(request.app.state.agents[agent_id])
+                
             logger.info(
                 f"Syscollector snapshot almacenado para {agent_id}: "
                 f"{sc_snapshot.get('process_count', 0)} procesos, "

@@ -1,0 +1,3 @@
+module.exports=[90048,(a,b,c)=>{let{createClientModuleProxy:d}=a.r(11820);a.n(d("[project]/integradora/Horus/dashboard/node_modules/next/dist/client/components/builtin/global-error.js <module evaluation>"))},46519,(a,b,c)=>{let{createClientModuleProxy:d}=a.r(11820);a.n(d("[project]/integradora/Horus/dashboard/node_modules/next/dist/client/components/builtin/global-error.js"))},10859,a=>{"use strict";a.i(90048);var b=a.i(46519);a.n(b)}];
+
+//# sourceMappingURL=150fe_next_dist_client_components_builtin_global-error_a4809f73.js.map

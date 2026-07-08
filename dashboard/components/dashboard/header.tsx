@@ -12,6 +12,9 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
 import { searchAlerts } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
+import { getRoleLabel, getRoleBadgeClass } from "@/lib/permissions"
+import { cn } from "@/lib/utils"
 
 interface HeaderProps {
   title: string
@@ -54,6 +57,10 @@ export function Header({
   showTimeRange = true,
   showRefresh = true,
 }: HeaderProps) {
+  const { user } = useAuth()
+  const initials = user?.username?.slice(0, 2).toUpperCase() ?? "??"
+  const roleLabel = getRoleLabel(user?.role)
+  const roleBadgeClass = getRoleBadgeClass(user?.role)
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -239,9 +246,22 @@ export function Header({
           </Badge>
         </Button>
 
-        {/* User Avatar */}
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-primary text-sm font-medium text-sidebar-primary-foreground">
-          A
+        {/* User Avatar + Role */}
+        <div className="flex items-center gap-2">
+          <div className="text-right hidden sm:block">
+            <p className="text-xs font-medium text-foreground leading-none">{user?.username ?? "–"}</p>
+            <span
+              className={cn(
+                "inline-block mt-1 rounded-full border px-2 py-0 text-[10px] font-semibold leading-4",
+                roleBadgeClass
+              )}
+            >
+              {roleLabel}
+            </span>
+          </div>
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-primary text-sm font-medium text-sidebar-primary-foreground">
+            {initials}
+          </div>
         </div>
       </div>
     </header>

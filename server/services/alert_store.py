@@ -49,6 +49,8 @@ class AlertStore:
                 action TEXT,
                 raw_log TEXT,
                 path TEXT,
+                hash_before TEXT,
+                hash_after TEXT,
                 mitre_json TEXT,
                 correlation INTEGER DEFAULT 0,
                 event_count INTEGER DEFAULT 1,
@@ -101,6 +103,39 @@ class AlertStore:
             )
         """)
 
+        # -----------------------------------------------------------------------
+        # Agents table (persistent storage)
+        # -----------------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT,
+                hostname TEXT,
+                ip TEXT,
+                os TEXT,
+                version TEXT,
+                cluster TEXT,
+                groups TEXT,
+                enrolled_at TEXT,
+                last_seen REAL,
+                status TEXT,
+                syscollector_json TEXT
+            )
+        """)
+        
+        # -----------------------------------------------------------------------
+        # Migrations
+        # -----------------------------------------------------------------------
+        try:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN hash_before TEXT")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN hash_after TEXT")
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
         logger.info(f"Alert store inicializado: {self.db_path}")
 
@@ -116,9 +151,9 @@ class AlertStore:
             INSERT INTO alerts (
                 id, rule_id, rule_name, rule_description, level,
                 event_type, agent_id, src_ip, dst_user, action,
-                raw_log, path, mitre_json, correlation, event_count,
+                raw_log, path, hash_before, hash_after, mitre_json, correlation, event_count,
                 timestamp, agent_time_iso, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             alert_id,
             alert.get("rule_id"),
@@ -132,6 +167,8 @@ class AlertStore:
             alert.get("action"),
             alert.get("raw_log"),
             alert.get("path"),
+            alert.get("hash_before"),
+            alert.get("hash_after"),
             json.dumps(alert.get("mitre", {})),
             1 if alert.get("correlation") else 0,
             alert.get("event_count", 1),
@@ -150,6 +187,7 @@ class AlertStore:
         severity: Optional[int] = None,
         agent_id: Optional[str] = None,
         event_type: Optional[str] = None,
+        exclude_types: Optional[List[str]] = None,
     ) -> List[Dict]:
         """Gets recent alerts with optional filters."""
         conn = self._get_conn()
@@ -169,6 +207,11 @@ class AlertStore:
         if event_type:
             query += " AND event_type = ?"
             params.append(event_type)
+
+        if exclude_types:
+            placeholders = ",".join("?" for _ in exclude_types)
+            query += f" AND (event_type NOT IN ({placeholders}) OR event_type IS NULL)"
+            params.extend(exclude_types)
 
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -207,6 +250,7 @@ class AlertStore:
         severity: Optional[int] = None,
         agent_id: Optional[str] = None,
         event_type: Optional[str] = None,
+        exclude_types: Optional[List[str]] = None,
     ) -> int:
         """Gets the total count of alerts with optional filters."""
         conn = self._get_conn()
@@ -226,6 +270,11 @@ class AlertStore:
         if event_type:
             query += " AND event_type = ?"
             params.append(event_type)
+
+        if exclude_types:
+            placeholders = ",".join("?" for _ in exclude_types)
+            query += f" AND (event_type NOT IN ({placeholders}) OR event_type IS NULL)"
+            params.extend(exclude_types)
 
         cursor.execute(query, params)
         return cursor.fetchone()[0]
@@ -441,3 +490,83 @@ class AlertStore:
         if deleted:
             logger.info(f"Token móvil eliminado: ...{token[-8:]}")
         return deleted
+
+    # ---------------------------------------------------------------------------
+    # Agent management (persistence)
+    # ---------------------------------------------------------------------------
+
+    def save_agent(self, agent: dict) -> None:
+        """Saves or updates an agent in the database."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        syscollector_data = agent.get("syscollector")
+        syscollector_json = json.dumps(syscollector_data) if syscollector_data else None
+        
+        cursor.execute("""
+            INSERT INTO agents (
+                agent_id, name, hostname, ip, os, version,
+                cluster, groups, enrolled_at, last_seen, status, syscollector_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                name = excluded.name,
+                hostname = excluded.hostname,
+                ip = excluded.ip,
+                os = excluded.os,
+                version = excluded.version,
+                cluster = excluded.cluster,
+                groups = excluded.groups,
+                last_seen = excluded.last_seen,
+                status = excluded.status,
+                syscollector_json = excluded.syscollector_json
+        """, (
+            agent.get("agent_id"),
+            agent.get("name"),
+            agent.get("hostname"),
+            agent.get("ip"),
+            agent.get("os"),
+            agent.get("version"),
+            agent.get("cluster"),
+            json.dumps(agent.get("groups", [])),
+            agent.get("enrolled_at"),
+            agent.get("last_seen"),
+            agent.get("status"),
+            syscollector_json
+        ))
+        conn.commit()
+
+    def get_all_agents(self) -> Dict[str, dict]:
+        """Returns a dict of all agents keyed by agent_id."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM agents")
+        
+        agents = {}
+        for row in cursor.fetchall():
+            d = dict(row)
+            try:
+                d["groups"] = json.loads(d.get("groups") or "[]")
+            except:
+                d["groups"] = []
+            
+            if d.get("syscollector_json"):
+                try:
+                    d["syscollector"] = json.loads(d.pop("syscollector_json"))
+                except:
+                    d["syscollector"] = None
+                    d.pop("syscollector_json", None)
+            else:
+                d.pop("syscollector_json", None)
+                
+            agents[d["agent_id"]] = d
+            
+        return agents
+    
+    def delete_agent(self, agent_id: str) -> bool:
+        """Deletes an agent from the database."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+

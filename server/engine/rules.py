@@ -89,6 +89,8 @@ class Rule:
             "action": decoded.get("action") or parsed.get("action") or event.get("action"),
             "raw_log": event.get("raw_log", ""),
             "path": event.get("path"),
+            "hash_before": event.get("hash_before") or parsed.get("hash_before"),
+            "hash_after": event.get("hash_after") or parsed.get("hash_after") or event.get("hash_current"),
             "timestamp": event.get("timestamp"),
             "agent_time_iso": event.get("agent_time_iso"),
         }

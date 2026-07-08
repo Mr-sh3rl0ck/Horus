@@ -1,6 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect } from "react"
+import { useAuth } from "@/lib/auth-context"
+import { canAccess } from "@/lib/permissions"
 import { LoginPage } from "@/components/dashboard/pages/login-page"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
@@ -10,7 +12,9 @@ import { FIMPage } from "@/components/dashboard/pages/fim-page"
 import { VulnerabilitiesPage } from "@/components/dashboard/pages/vulnerabilities-page"
 import { ThreatsPage } from "@/components/dashboard/pages/threats-page"
 import { SyscollectorPage } from "@/components/dashboard/pages/syscollector-page"
-import { API_BASE } from "@/lib/api"
+import { UsersPage } from "@/components/dashboard/pages/users-page"
+import { AdminPanelPage } from "@/components/dashboard/pages/admin-panel-page"
+import { useState } from "react"
 
 const pageConfig: Record<string, { title: string; breadcrumbs: { label: string }[] }> = {
     overview: {
@@ -37,64 +41,35 @@ const pageConfig: Record<string, { title: string; breadcrumbs: { label: string }
         title: "System Inventory",
         breadcrumbs: [{ label: "Home" }, { label: "Endpoint Security" }, { label: "System Inventory" }],
     },
+    users: {
+        title: "Gestión de Usuarios",
+        breadcrumbs: [{ label: "Home" }, { label: "Administración" }, { label: "Usuarios" }],
+    },
+    "admin-panel": {
+        title: "Panel de Administración",
+        breadcrumbs: [{ label: "Home" }, { label: "Administración" }, { label: "Panel Admin" }],
+    },
 }
 
 export default function SecurityDashboard() {
-    const [authenticated, setAuthenticated] = useState(false)
-    const [checkingAuth, setCheckingAuth] = useState(true)
+    const { user, isAuthenticated, isLoading, login, logout } = useAuth()
     const [currentPage, setCurrentPage] = useState("overview")
-    const config = pageConfig[currentPage] || pageConfig.overview
 
-    // Check for existing session on mount
+    // Redirect to overview if current page is not accessible with the current role
     useEffect(() => {
-        const token = localStorage.getItem("horus_token")
-        if (token) {
-            // Verify the token is still valid
-            fetch(`${API_BASE}/auth/verify`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
-                },
-            })
-                .then((res) => {
-                    if (res.ok) {
-                        setAuthenticated(true)
-                    } else {
-                        localStorage.removeItem("horus_token")
-                        localStorage.removeItem("horus_user")
-                    }
-                })
-                .catch(() => {
-                    // Server unreachable — clear stale token
-                    localStorage.removeItem("horus_token")
-                    localStorage.removeItem("horus_user")
-                })
-                .finally(() => setCheckingAuth(false))
-        } else {
-            setCheckingAuth(false)
+        if (user && !canAccess(user.role, currentPage as Parameters<typeof canAccess>[1])) {
+            setCurrentPage("overview")
         }
-    }, [])
+    }, [user, currentPage])
 
-    const handleLogin = (token: string) => {
-        setAuthenticated(true)
+    const config = pageConfig[currentPage] ?? pageConfig.overview
+
+    const handleLogin = (token: string, username: string, role: string) => {
+        login(token, username, role as Parameters<typeof login>[2])
     }
 
-    const handleLogout = () => {
-        const token = localStorage.getItem("horus_token")
-        if (token) {
-            fetch(`${API_BASE}/auth/logout`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${token}` },
-            }).catch(() => { })
-        }
-        localStorage.removeItem("horus_token")
-        localStorage.removeItem("horus_user")
-        setAuthenticated(false)
-    }
-
-    // Show nothing while checking auth
-    if (checkingAuth) {
+    // Show spinner while checking auth
+    if (isLoading) {
         return (
             <div className="flex h-screen items-center justify-center bg-background">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-sidebar-primary border-t-transparent" />
@@ -103,11 +78,23 @@ export default function SecurityDashboard() {
     }
 
     // Show login page if not authenticated
-    if (!authenticated) {
+    if (!isAuthenticated) {
         return <LoginPage onLogin={handleLogin} />
     }
 
     const renderPage = () => {
+        // Guard: check access before rendering
+        const section = currentPage as Parameters<typeof canAccess>[1]
+        if (!canAccess(user?.role, section)) {
+            return (
+                <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+                    <span className="text-5xl">🔒</span>
+                    <p className="text-lg font-medium">Acceso denegado</p>
+                    <p className="text-sm">Tu rol no tiene permisos para ver esta sección.</p>
+                </div>
+            )
+        }
+
         switch (currentPage) {
             case "endpoints":
                 return <EndpointsPage />
@@ -119,14 +106,23 @@ export default function SecurityDashboard() {
                 return <ThreatsPage />
             case "syscollector":
                 return <SyscollectorPage />
+            case "users":
+                return <UsersPage />
+            case "admin-panel":
+                return <AdminPanelPage />
             default:
-                return <OverviewPage />
+                return <OverviewPage role={user?.role ?? "viewer"} />
         }
     }
 
     return (
         <div className="flex h-screen overflow-hidden bg-background">
-            <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} onLogout={handleLogout} />
+            <Sidebar
+                currentPage={currentPage}
+                onNavigate={setCurrentPage}
+                onLogout={logout}
+                role={user?.role ?? "viewer"}
+            />
             <div className="flex flex-1 flex-col overflow-hidden">
                 <Header title={config.title} breadcrumbs={config.breadcrumbs} />
                 <main className="flex-1 overflow-y-auto">{renderPage()}</main>

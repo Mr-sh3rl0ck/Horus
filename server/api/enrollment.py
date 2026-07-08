@@ -53,17 +53,23 @@ async def enroll_agent(request: Request, body: EnrollRequest):
 
     # Registrar agente
     agents: Dict = request.app.state.agents
-    agents[agent_id] = {
+    new_agent = {
         "agent_id": agent_id,
         "name": body.agent_name,
         "hostname": body.hostname or body.agent_name,
         "ip": client_ip,
         "os": body.os or "Unknown",
         "version": body.version or "0.1.0",
+        "cluster": "default",
+        "groups": ["default"],
         "enrolled_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "last_seen": time.time(),
         "status": "active",
     }
+    agents[agent_id] = new_agent
+    
+    if hasattr(request.app.state, "alert_store"):
+        request.app.state.alert_store.save_agent(new_agent)
 
     # Inicializar cola de comandos
     request.app.state.pending_commands[agent_id] = []

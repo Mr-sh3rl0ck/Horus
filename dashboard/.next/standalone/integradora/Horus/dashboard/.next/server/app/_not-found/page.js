@@ -1,0 +1,13 @@
+var R=require("../../chunks/ssr/[turbopack]_runtime.js")("server/app/_not-found/page.js")
+R.c("server/chunks/ssr/integradora_Horus_dashboard_f4e18080._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__6a3263bd._.js")
+R.c("server/chunks/ssr/150fe_next_dist_esm_build_templates_app-page_258c0dae.js")
+R.c("server/chunks/ssr/[root-of-the-server]__c2affc44._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__285b1231._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__1fc63b29._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__e42276ed._.js")
+R.c("server/chunks/ssr/150fe_next_dist_client_components_f19ef0f1._.js")
+R.c("server/chunks/ssr/150fe_next_dist_client_components_builtin_forbidden_f1051ac0.js")
+R.c("server/chunks/ssr/ef923_Horus_dashboard__next-internal_server_app__not-found_page_actions_f2e433b7.js")
+R.m(82526)
+module.exports=R.m(82526).exports

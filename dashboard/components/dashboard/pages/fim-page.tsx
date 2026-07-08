@@ -124,8 +124,8 @@ export function FIMPage() {
           path: e.path || "—",
           rule_name: e.rule_name || "File integrity event",
           level: e.level || 5,
-          hash_current: "—",
-          hash_previous: "—",
+          hash_current: e.hash_after || "—",
+          hash_previous: e.hash_before || "—",
         }))
         setFimEvents(events)
         setServerOnline(true)

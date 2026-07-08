@@ -80,7 +80,7 @@ export function ThreatsPage() {
 
     const fetchAlerts = useCallback(async () => {
         try {
-            const res = await getAlerts({ limit: 50 })
+            const res = await getAlerts({ limit: 50, type: "threat" })
             if (res && res.alerts && res.alerts.length > 0) {
                 const events: ThreatEvent[] = res.alerts.map((alert: any) => ({
                     timestamp: alert.timestamp
@@ -93,8 +93,8 @@ export function ThreatsPage() {
                     rule: alert.rule_name || "Unknown rule",
                     ruleId: alert.rule_id || 0,
                     level: alert.level || 0,
-                    tactic: alert.mitre?.tactic?.[0] || severityLabel(alert.level || 0),
-                    technique: alert.mitre?.technique?.[0] || "—",
+                    tactic: alert.mitre?.tactics?.[0] || severityLabel(alert.level || 0),
+                    technique: alert.mitre?.techniques?.[0] || "—",
                     description: alert.rule_description || alert.rule_name || "—",
                 }))
                 setThreatEvents(events)

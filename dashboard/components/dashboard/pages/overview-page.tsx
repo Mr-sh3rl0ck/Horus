@@ -117,7 +117,7 @@ interface StatsData {
     agents_active: number
 }
 
-export function OverviewPage() {
+export function OverviewPage({ role = "viewer" }: { role?: string }) {
     const [stats, setStats] = useState<StatsData | null>(null)
     const [agentData, setAgentData] = useState(defaultAgentData)
     const [alertsData, setAlertsData] = useState(defaultAlertsData)
@@ -126,10 +126,13 @@ export function OverviewPage() {
 
     const fetchData = useCallback(async () => {
         try {
-            const [statsRes, agentsRes] = await Promise.all([
-                getStats().catch(() => null),
-                getAgents().catch(() => null),
-            ])
+            const promises: Promise<any>[] = [getStats().catch(() => null)]
+            if (role !== "viewer") {
+                promises.push(getAgents().catch(() => null))
+            } else {
+                promises.push(Promise.resolve(null))
+            }
+            const [statsRes, agentsRes] = await Promise.all(promises)
 
             if (statsRes) {
                 setStats(statsRes)

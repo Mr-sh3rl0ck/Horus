@@ -26,7 +26,7 @@ import {
     DialogDescription,
     DialogFooter,
 } from "@/components/ui/dialog"
-import { getAgents, getAgent } from "@/lib/api"
+import { getAgents, getAgent, deleteAgent, API_BASE } from "@/lib/api"
 
 
 interface Agent {
@@ -206,9 +206,7 @@ export function EndpointsPage() {
     const handleRemoveAgent = useCallback(async () => {
         if (!removeAgent) return
         try {
-            await fetch(`http://localhost:5001/api/agents/${removeAgent.id}`, {
-                method: "DELETE",
-            })
+            await deleteAgent(removeAgent.id)
         } catch {
             // Server may not support DELETE yet, that's OK
         }
@@ -487,8 +485,8 @@ export function EndpointsPage() {
                         </div>
                         <div className="rounded-lg border border-border bg-muted/50 p-4">
                             <p className="text-sm font-medium text-foreground mb-2">2. Configure server connection</p>
-                            <code className="block rounded bg-background px-3 py-2 text-xs font-mono text-muted-foreground">
-                                {`"server": { "host": "<server-ip>", "enrollment_port": 5001, "ingestion_port": 5001 }`}
+                            <code className="block rounded bg-background px-3 py-2 text-xs font-mono text-muted-foreground break-all">
+                                {`"server": { "host": "${new URL(API_BASE).hostname}", "enrollment_port": 5000, "ingestion_port": 5001 }`}
                             </code>
                         </div>
                         <div className="rounded-lg border border-border bg-muted/50 p-4">
