@@ -9,14 +9,11 @@ import secrets
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from passlib.context import CryptContext
+import bcrypt
 
 logger = logging.getLogger("horus.server.user_store")
 
 _local = threading.local()
-
-# Bcrypt context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 VALID_ROLES = {"admin", "soc_analyst", "compliance", "viewer"}
 
@@ -66,11 +63,15 @@ class UserStore:
 
     @staticmethod
     def hash_password(plain: str) -> str:
-        return pwd_context.hash(plain)
+        salt = bcrypt.gensalt()
+        return bcrypt.hashpw(plain.encode('utf-8'), salt).decode('utf-8')
 
     @staticmethod
     def verify_password(plain: str, hashed: str) -> bool:
-        return pwd_context.verify(plain, hashed)
+        try:
+            return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
+        except ValueError:
+            return False
 
     # ------------------------------------------------------------------
     # CRUD
