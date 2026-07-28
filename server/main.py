@@ -1,6 +1,7 @@
 # Horus SIEM Server - Main Entry Point
 # FastAPI application with Redis queue and analysis pipeline
 
+import os
 import logging
 import asyncio
 from pathlib import Path
@@ -40,14 +41,76 @@ logger = logging.getLogger("horus.server")
 # Configuration
 # ---------------------------------------------------------------------------
 
+def _env_bool(name: str) -> bool | None:
+    """Lee una variable de entorno booleana. Retorna None si no está definida."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def apply_env_overrides(config: dict) -> dict:
+    """
+    Aplica variables de entorno sobre el YAML.
+
+    Permite desplegar en Docker (o cambiar de red para una demo) sin editar
+    archivos de configuración ni reconstruir la imagen.
+    """
+    config.setdefault("auth", {})
+    config.setdefault("redis", {})
+    config.setdefault("server", {})
+    config.setdefault("firebase", {})
+    config.setdefault("push", {})
+
+    # --- Canal agente ↔ servidor ---
+    if os.environ.get("HORUS_PSK"):
+        config["auth"]["psk"] = os.environ["HORUS_PSK"]
+
+    require_psk = _env_bool("HORUS_REQUIRE_AGENT_PSK")
+    if require_psk is not None:
+        config["auth"]["require_agent_psk"] = require_psk
+
+    # --- Redis ---
+    if os.environ.get("REDIS_HOST"):
+        config["redis"]["host"] = os.environ["REDIS_HOST"]
+    if os.environ.get("REDIS_PORT"):
+        config["redis"]["port"] = int(os.environ["REDIS_PORT"])
+
+    # --- CORS (útil para exponer el dashboard en la LAN durante una demo) ---
+    if os.environ.get("HORUS_CORS_ORIGINS"):
+        origins = [
+            o.strip()
+            for o in os.environ["HORUS_CORS_ORIGINS"].split(",")
+            if o.strip()
+        ]
+        if origins:
+            config["server"]["cors_origins"] = origins
+
+    # --- Firebase Cloud Messaging ---
+    fb_enabled = _env_bool("FIREBASE_ENABLED")
+    if fb_enabled is not None:
+        config["firebase"]["enabled"] = fb_enabled
+    if os.environ.get("FIREBASE_PROJECT_ID"):
+        config["firebase"]["project_id"] = os.environ["FIREBASE_PROJECT_ID"]
+    if os.environ.get("FIREBASE_CREDENTIALS"):
+        config["firebase"]["service_account_key"] = os.environ["FIREBASE_CREDENTIALS"]
+
+    if os.environ.get("PUSH_MIN_LEVEL"):
+        config["push"]["min_level"] = int(os.environ["PUSH_MIN_LEVEL"])
+
+    return config
+
+
 def load_config(path: str = "config.yaml") -> dict:
-    """Carga la configuración del servidor desde YAML."""
+    """Carga la configuración del servidor desde YAML y aplica overrides de entorno."""
     config_file = Path(path)
     if not config_file.exists():
         raise FileNotFoundError(f"Configuración no encontrada: {path}")
 
     with open(config_file, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
+
+    return apply_env_overrides(config)
 
 
 CONFIG = load_config()
@@ -108,7 +171,6 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis_client
     app.state.alert_store = alert_store
     app.state.agents = alert_store.get_all_agents()  # In-memory agent registry loaded from DB
-    app.state.pending_commands = {agent_id: [] for agent_id in app.state.agents}  # agent_id -> [commands]
     app.state.sessions = {}  # token -> session dict (shared with auth.py)
     app.state.workers = workers
 
@@ -155,8 +217,24 @@ async def lifespan(app: FastAPI):
     user_store.ensure_admin(ADMIN_USER, admin_password)
     logger.info("=" * 60)
     logger.info("  DASHBOARD CREDENTIALS")
-    logger.info(f"  Usuario : admin")
+    logger.info(f"  Usuario : {ADMIN_USER}")
     logger.info(f"  Password: {admin_password}")
+    logger.info("=" * 60)
+
+    # Resumen de estado — evita sorpresas durante una demo en vivo
+    auth_cfg = CONFIG.get("auth", {})
+    pending_cmds = alert_store.count_pending_commands()
+    logger.info(f"  Agentes registrados   : {len(app.state.agents)}")
+    logger.info(f"  Comandos pendientes   : {pending_cmds}")
+    logger.info(
+        f"  PSK de agentes        : "
+        f"{'requerido' if auth_cfg.get('require_agent_psk', True) else 'DESACTIVADO'}"
+    )
+    logger.info(
+        f"  Push notifications    : "
+        f"{'activas' if push_service.is_enabled else 'inactivas (Firebase sin configurar)'}"
+    )
+    logger.info(f"  CORS permitido        : {CONFIG.get('server', {}).get('cors_origins')}")
     logger.info("=" * 60)
 
     logger.info("Servidor listo")
@@ -190,11 +268,18 @@ app = FastAPI(
 )
 
 # CORS
+#
+# Con allow_origins=["*"] los navegadores rechazan allow_credentials=True.
+# Horus autentica con Bearer tokens en el header (no con cookies), así que
+# desactivar credentials en modo wildcard es seguro y evita que el dashboard
+# falle silenciosamente cuando se expone en la LAN con HORUS_CORS_ORIGINS=*.
 cors_origins = CONFIG.get("server", {}).get("cors_origins", ["*"])
+wildcard = "*" in cors_origins
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=not wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -11,6 +11,22 @@ COMPOSE_FILE="docker-compose.yml"
 SERVER_CONTAINER="horus-server"
 MAX_WAIT=120  # segundos máximos para esperar al servidor
 
+cd "$(dirname "$0")"
+
+# --- Host de acceso ---------------------------------------------------------
+# Uso:  ./deploy.sh [IP_O_HOSTNAME]
+# Si se omite, se lee HORUS_HOST del .env y, en su defecto, 'localhost'.
+# Necesario cuando el dashboard o el móvil se conectan desde otra máquina:
+# Next.js hornea la URL del API en el bundle durante el build.
+if [ -n "$1" ]; then
+    export HORUS_HOST="$1"
+elif [ -f .env ]; then
+    # shellcheck disable=SC1091
+    export HORUS_HOST="$(grep -E '^HORUS_HOST=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")"
+fi
+HORUS_HOST="${HORUS_HOST:-localhost}"
+export HORUS_HOST
+
 # --- Colores ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -44,9 +60,22 @@ else
 fi
 
 echo -e "${YELLOW}Usando: ${COMPOSE_CMD}${NC}"
+echo -e "${YELLOW}Host de acceso: ${BOLD}${HORUS_HOST}${NC}"
 echo ""
 
-# --- 2. Build & Start ---
+# --- 2. Preflight: archivos que docker-compose monta como volumen ---
+# Docker crearía un DIRECTORIO en su lugar si no existen, y el servidor
+# fallaría al arrancar.
+mkdir -p server/data
+
+if [ ! -f serviceAccountKey.json ]; then
+    echo -e "${YELLOW}serviceAccountKey.json no existe — creando placeholder vacío${NC}"
+    echo -e "${YELLOW}(las push notifications quedarán desactivadas)${NC}"
+    echo '{}' > serviceAccountKey.json
+    echo ""
+fi
+
+# --- 3. Build & Start ---
 echo -e "${BOLD}Paso 1/3: Construyendo y levantando servicios...${NC}"
 echo ""
 
@@ -107,28 +136,44 @@ if [ -z "$PASSWORD" ]; then
 fi
 
 # --- 5. Mostrar resultado ---
+PSK="$(grep -E '^HORUS_PSK=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")"
+PSK="${PSK:-horus-default-psk}"
+
 echo ""
-echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║${NC}          ${GREEN}${BOLD}Horus SIEM Desplegado${NC}                        ${CYAN}║${NC}"
-echo -e "${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
-echo -e "${CYAN}║${NC}                                                          ${CYAN}║${NC}"
-echo -e "${CYAN}║${NC}  ${BOLD}Dashboard:${NC}  http://localhost:3000                      ${CYAN}║${NC}"
-echo -e "${CYAN}║${NC}  ${BOLD}API:${NC}        http://localhost:5001                      ${CYAN}║${NC}"
-echo -e "${CYAN}║${NC}                                                          ${CYAN}║${NC}"
-echo -e "${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
-echo -e "${CYAN}║${NC}                                                          ${CYAN}║${NC}"
-echo -e "${CYAN}║${NC}  ${BOLD}Usuario:${NC}    admin                                     ${CYAN}║${NC}"
+echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}"
+echo -e "          ${GREEN}${BOLD}Horus SIEM Desplegado${NC}"
+echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "  ${BOLD}Dashboard:${NC}  http://${HORUS_HOST}:3000"
+echo -e "  ${BOLD}API:${NC}        http://${HORUS_HOST}:5001"
+echo -e "  ${BOLD}API docs:${NC}   http://${HORUS_HOST}:5001/docs"
+echo ""
+echo -e "  ${BOLD}Usuario:${NC}    admin"
 if [ -n "$PASSWORD" ]; then
-echo -e "${CYAN}║${NC}  ${BOLD}Password:${NC}   ${YELLOW}${PASSWORD}${NC}$(printf '%*s' $((37 - ${#PASSWORD})) '')${CYAN}║${NC}"
+    echo -e "  ${BOLD}Password:${NC}   ${YELLOW}${PASSWORD}${NC}"
 else
-echo -e "${CYAN}║${NC}  ${BOLD}Password:${NC}   ${RED}(ver: docker logs horus-server)${NC}        ${CYAN}║${NC}"
+    echo -e "  ${BOLD}Password:${NC}   ${RED}(ver: docker logs horus-server | grep Password)${NC}"
 fi
-echo -e "${CYAN}║${NC}                                                          ${CYAN}║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${YELLOW}La password cambia cada vez que se reinicia el servidor${NC}"
-echo -e "${YELLOW}Para verla de nuevo: docker logs horus-server | grep Password${NC}"
+echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}"
+echo -e "  ${BOLD}Conectar un agente${NC} (en la máquina a monitorear):"
+echo -e "    cd agents && sudo ./setup_agent.sh ${HORUS_HOST} \$(hostname) ${PSK}"
 echo ""
+echo -e "  ${BOLD}Conectar la app móvil${NC}:"
+echo -e "    Base URL: http://${HORUS_HOST}:5001/api"
+echo -e "    Login:    POST /api/auth/login"
+echo ""
+echo -e "  ${BOLD}Simular un ataque${NC} (demo en vivo):"
+echo -e "    python testing-mvp/simulate_attack.py --server http://${HORUS_HOST}:5001 --psk ${PSK}"
+echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}"
+echo ""
+
+if [ "$HORUS_HOST" = "localhost" ]; then
+    echo -e "${YELLOW}Nota: el dashboard solo funcionará desde ESTA máquina.${NC}"
+    echo -e "${YELLOW}Para acceder desde el móvil u otro equipo, redespliega con la IP:${NC}"
+    echo -e "${YELLOW}  ./deploy.sh 192.168.1.100${NC}"
+    echo ""
+fi
 
 # --- Estado de los contenedores ---
 echo -e "${BOLD}Estado de servicios:${NC}"

@@ -137,6 +137,16 @@ class CommClient:
         self.agent_id: Optional[str] = None
         self.cipher: Optional[AESCipher] = None
         self._session = requests.Session() if HAS_REQUESTS else None
+        # Guardados para poder re-enrollar si el servidor no estaba disponible
+        # cuando arrancó el agente.
+        self._psk: Optional[str] = None
+        self._agent_name: Optional[str] = None
+        self._last_enroll_attempt: float = 0.0
+        self._enroll_retry_seconds: int = 30
+
+    def _auth_headers(self) -> Dict[str, str]:
+        """Header de autenticación del canal agente↔servidor (PSK compartido)."""
+        return {"X-Horus-PSK": self._psk} if self._psk else {}
 
     @property
     def enrollment_url(self) -> str:
@@ -160,6 +170,11 @@ class CommClient:
         if not HAS_REQUESTS:
             logger.error("requests no disponible, enrollment imposible")
             return False
+
+        # Recordar para poder reintentar automáticamente más adelante
+        self._psk = psk
+        self._agent_name = agent_name
+        self._last_enroll_attempt = time.time()
 
         try:
             import platform
@@ -224,6 +239,29 @@ class CommClient:
             logger.error(f"Error en enrollment: {e}")
             return False
 
+    def ensure_enrolled(self) -> bool:
+        """
+        Garantiza que el agente tenga un agent_id válido.
+
+        Si el enrollment inicial falló (por ejemplo, el servidor todavía no
+        estaba levantado), reintenta cada `_enroll_retry_seconds`. Esto evita
+        que el agente quede inservible si se arranca antes que el servidor.
+
+        Returns:
+            True si hay un agent_id disponible.
+        """
+        if self.agent_id:
+            return True
+
+        if not self._psk or not self._agent_name:
+            return False
+
+        if time.time() - self._last_enroll_attempt < self._enroll_retry_seconds:
+            return False
+
+        logger.info("Reintentando enrollment con el servidor...")
+        return self.enroll(self._agent_name, self._psk)
+
     def send_event(self, event: Dict) -> bool:
         """
         Envía un evento al servidor.
@@ -235,6 +273,9 @@ class CommClient:
             True si se envió correctamente
         """
         if not HAS_REQUESTS:
+            return False
+
+        if not self.agent_id and not self.ensure_enrolled():
             return False
 
         try:
@@ -257,8 +298,16 @@ class CommClient:
             response = self._session.post(
                 f"{self.ingestion_url}/api/events",
                 json=data,
+                headers=self._auth_headers(),
                 timeout=5,
             )
+
+            if response.status_code == 401:
+                logger.error(
+                    "Servidor rechazó el evento: PSK inválido. "
+                    "Revisa que auth.psk coincida entre agente y servidor."
+                )
+                return False
 
             return response.status_code == 200
 
@@ -276,12 +325,16 @@ class CommClient:
         Returns:
             Lista de comandos pendientes
         """
-        if not HAS_REQUESTS or not self.agent_id:
+        if not HAS_REQUESTS:
+            return []
+
+        if not self.agent_id and not self.ensure_enrolled():
             return []
 
         try:
             response = self._session.get(
-                f"{self.ingestion_url}/api/commands/{self.agent_id}",
+                f"{self.ingestion_url}/api/agent/commands/{self.agent_id}",
+                headers=self._auth_headers(),
                 timeout=5,
             )
 
@@ -296,14 +349,33 @@ class CommClient:
 
         return []
 
-    def load_existing_credentials(self) -> bool:
-        """Carga credenciales existentes (si ya se enrolló antes)."""
+    def load_existing_credentials(self, psk: Optional[str] = None,
+                                  agent_name: Optional[str] = None) -> bool:
+        """
+        Carga credenciales existentes (si ya se enrolló antes).
+
+        Args:
+            psk: PSK con el que reconstruir el cifrador AES. Sin él, el agente
+                 enviaría los eventos en texto plano tras un reinicio.
+            agent_name: Nombre a usar si hace falta re-enrollar.
+        """
         creds = load_credentials(self.credentials_path)
-        if creds:
-            self.agent_id = creds.get("agent_id")
-            logger.info(f"Credenciales cargadas — Agent ID: {self.agent_id}")
-            return True
-        return False
+        if not creds:
+            return False
+
+        self.agent_id = creds.get("agent_id")
+        self._agent_name = agent_name or creds.get("agent_name")
+
+        if psk:
+            self._psk = psk
+            if HAS_CRYPTO:
+                self.cipher = AESCipher(derive_key_from_psk(psk))
+
+        logger.info(
+            f"Credenciales cargadas — Agent ID: {self.agent_id} "
+            f"(cifrado: {'activo' if self.cipher else 'inactivo'})"
+        )
+        return True
 
 
 # ---------------------------------------------------------------------------

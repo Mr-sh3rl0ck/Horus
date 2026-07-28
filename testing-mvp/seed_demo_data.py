@@ -246,6 +246,8 @@ def init_db(db_path: str) -> sqlite3.Connection:
             action TEXT,
             raw_log TEXT,
             path TEXT,
+            hash_before TEXT,
+            hash_after TEXT,
             mitre_json TEXT,
             correlation INTEGER DEFAULT 0,
             event_count INTEGER DEFAULT 1,
@@ -259,17 +261,32 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_agent ON alerts(agent_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_time ON alerts(created_at DESC)")
 
+    # El esquema FTS debe coincidir con services/alert_store.py: tabla FTS5
+    # normal (no external-content) + triggers de insert/delete/update. Si no,
+    # el servidor detectaría el esquema antiguo y reconstruiría el índice.
     try:
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS alerts_fts USING fts5(
-                id, rule_name, rule_description, raw_log, src_ip,
-                dst_user, action, path,
-                content='alerts',
-                content_rowid='rowid'
+                id UNINDEXED, rule_name, rule_description, raw_log, src_ip,
+                dst_user, action, path
             )
         """)
         conn.execute("""
             CREATE TRIGGER IF NOT EXISTS alerts_ai AFTER INSERT ON alerts BEGIN
+                INSERT INTO alerts_fts(id, rule_name, rule_description, raw_log,
+                    src_ip, dst_user, action, path)
+                VALUES (new.id, new.rule_name, new.rule_description, new.raw_log,
+                    new.src_ip, new.dst_user, new.action, new.path);
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS alerts_ad AFTER DELETE ON alerts BEGIN
+                DELETE FROM alerts_fts WHERE id = old.id;
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS alerts_au AFTER UPDATE ON alerts BEGIN
+                DELETE FROM alerts_fts WHERE id = old.id;
                 INSERT INTO alerts_fts(id, rule_name, rule_description, raw_log,
                     src_ip, dst_user, action, path)
                 VALUES (new.id, new.rule_name, new.rule_description, new.raw_log,

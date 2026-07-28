@@ -2,6 +2,7 @@
 # FastAPI dependencies for authentication and role-based access control
 
 import time
+import secrets
 import logging
 from typing import Optional
 
@@ -11,6 +12,30 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 logger = logging.getLogger("horus.server.deps")
 
 security = HTTPBearer(auto_error=False)
+
+
+def require_agent_psk(request: Request) -> None:
+    """Validates the shared PSK used on the agent↔server channel.
+
+    Agents authenticate with the pre-shared key (header ``X-Horus-PSK``),
+    not with dashboard session tokens. Set ``auth.require_agent_psk: false``
+    in config.yaml to disable this check.
+    """
+    auth_cfg = request.app.state.config.get("auth", {})
+
+    if not auth_cfg.get("require_agent_psk", True):
+        return
+
+    expected = auth_cfg.get("psk", "")
+    provided = request.headers.get("X-Horus-PSK", "")
+
+    if not expected or not secrets.compare_digest(provided, expected):
+        client = request.client.host if request.client else "desconocido"
+        logger.warning(f"Petición de agente rechazada — PSK inválido (desde {client})")
+        raise HTTPException(
+            status_code=401,
+            detail="PSK inválido o ausente. Envía el header 'X-Horus-PSK'.",
+        )
 
 
 def get_current_session(request: Request) -> dict:

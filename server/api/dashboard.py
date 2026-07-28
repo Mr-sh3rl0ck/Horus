@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Request, Query, Depends
 
 from api.deps import get_current_session, require_role
+from services.response_actions import (
+    ACTION_CATALOG,
+    ALLOWED_ACTIONS,
+    validate_action_params,
+)
 
 logger = logging.getLogger("horus.server.dashboard")
 
@@ -134,15 +139,18 @@ async def get_agent_detail(request: Request, agent_id: str):
 
 @router.delete("/agents/{agent_id}", dependencies=[_admin_only])
 async def delete_agent(request: Request, agent_id: str):
-    """Elimina un agente del registro."""
+    """Elimina un agente del registro (memoria y base de datos)."""
     agents = request.app.state.agents
     if agent_id not in agents:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Agente no encontrado")
+
     del agents[agent_id]
-    # Also clean up pending commands
-    pending = getattr(request.app.state, "pending_commands", {})
-    pending.pop(agent_id, None)
+    # Borrar también de SQLite; si no, el agente reaparecería al reiniciar.
+    # delete_agent() limpia además sus comandos encolados.
+    request.app.state.alert_store.delete_agent(agent_id)
+
+    logger.info(f"Agente eliminado: {agent_id}")
     return {"status": "deleted", "agent_id": agent_id}
 
 
@@ -169,29 +177,76 @@ class CommandRequest(BaseModel):
     agent_id: str
     action: str
     params: dict = {}
+    alert_id: Optional[str] = None
 
-@router.post("/commands", dependencies=[_soc_or_above])
-async def send_command(request: Request, body: CommandRequest):
-    """Envia un comando a un agente."""
+
+@router.post("/commands")
+async def send_command(
+    request: Request,
+    body: CommandRequest,
+    session: dict = _soc_or_above,
+):
+    """Encola un comando de respuesta activa para un agente.
+
+    El agente lo recogerá en su siguiente ciclo de polling
+    (GET /api/commands/{agent_id}).
+    """
+    from fastapi import HTTPException
+
     agents = getattr(request.app.state, "agents", {})
     if body.agent_id not in agents:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Agente no encontrado")
-        
-    pending = getattr(request.app.state, "pending_commands", {})
-    if body.agent_id not in pending:
-        pending[body.agent_id] = []
-        
-    import uuid
-    cmd = {
-        "command_id": str(uuid.uuid4()),
-        "action": body.action,
-        "params": body.params,
-        "status": "pending"
+
+    if body.action not in ALLOWED_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Acción '{body.action}' no válida. Permitidas: {sorted(ALLOWED_ACTIONS)}",
+        )
+
+    validate_action_params(body.action, body.params)
+
+    command = request.app.state.alert_store.enqueue_command(
+        agent_id=body.agent_id,
+        action=body.action,
+        params=body.params,
+        source="dashboard",
+        alert_id=body.alert_id,
+        created_by=session.get("username"),
+    )
+
+    return {"status": "queued", "command": command}
+
+
+@router.get("/commands", dependencies=[_soc_or_above])
+async def list_commands(
+    request: Request,
+    agent_id: Optional[str] = None,
+    status: Optional[str] = Query(None, description="pending | delivered | completed | failed"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Historial de comandos de respuesta activa con su estado de ejecución."""
+    alert_store = request.app.state.alert_store
+    return {
+        "commands": alert_store.list_commands(agent_id=agent_id, status=status, limit=limit),
+        "pending": alert_store.count_pending_commands(agent_id),
     }
-    pending[body.agent_id].append(cmd)
-    
-    return {"status": "enqueued", "command": cmd}
+
+
+@router.get("/response-actions", dependencies=[_any_auth])
+async def get_response_actions():
+    """Catálogo de acciones de respuesta activa disponibles."""
+    return [{"id": key, **meta} for key, meta in ACTION_CATALOG.items()]
+
+
+@router.get("/commands/{command_id}", dependencies=[_soc_or_above])
+async def get_command_status(request: Request, command_id: str):
+    """Estado y resultado de un comando concreto."""
+    from fastapi import HTTPException
+
+    command = request.app.state.alert_store.get_command(command_id)
+    if not command:
+        raise HTTPException(status_code=404, detail="Comando no encontrado")
+    return command
 
 
 # ---------------------------------------------------------------------------

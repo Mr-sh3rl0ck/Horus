@@ -43,7 +43,11 @@ interface DataTableProps<T> {
   onRowClick?: (item: T) => void
 }
 
-export function DataTable<T extends Record<string, unknown>>({
+// `T extends object` en lugar de `Record<string, unknown>`: las interfaces de
+// TypeScript no obtienen índice implícito, así que tipos como Agent o
+// ThreatEvent no satisfacían la restricción anterior. El acceso por clave ya
+// va tipado vía `keyof T` más abajo.
+export function DataTable<T extends object>({
   data,
   columns,
   title,

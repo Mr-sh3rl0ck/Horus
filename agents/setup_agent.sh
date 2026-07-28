@@ -5,10 +5,13 @@
 # Un solo comando. No pide nada. Instala todo solo.
 #
 # Uso:
-#   sudo ./setup_agent.sh <IP_DEL_SERVIDOR>
+#   sudo ./setup_agent.sh <IP_DEL_SERVIDOR> [NOMBRE_AGENTE] [PSK]
 #
 # Ejemplo:
 #   sudo ./setup_agent.sh 192.168.1.100
+#   sudo ./setup_agent.sh 192.168.1.100 web-prod-01 mi-psk-secreto
+#
+# El PSK debe coincidir con auth.psk del servidor (o su HORUS_PSK).
 # ============================================================
 
 set -e
@@ -24,6 +27,7 @@ NC='\033[0m'
 AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVER_IP="${1:-}"
 AGENT_NAME="${2:-$(hostname)}"
+AGENT_PSK="${3:-${HORUS_PSK:-horus-default-psk}}"
 
 # --- Validar argumentos ---
 if [ -z "$SERVER_IP" ]; then
@@ -78,11 +82,18 @@ with open(config_path) as f:
 config["server"]["host"] = "$SERVER_IP"
 config["agent"]["name"] = "$AGENT_NAME"
 config["agent"]["id"] = None
+config.setdefault("auth", {})["psk"] = "$AGENT_PSK"
 with open(config_path, "w") as f:
     json.dump(config, f, indent=4)
 PYEOF
+
+# Un re-setup contra otro servidor debe forzar un enrollment nuevo:
+# el agent_id anterior no existe en la base del servidor destino.
+rm -f "$AGENT_DIR/data/agent_keys.enc"
+
 echo -e "   Servidor: ${BOLD}$SERVER_IP:5001${NC}"
 echo -e "   Agente:   ${BOLD}$AGENT_NAME${NC}"
+echo -e "   PSK:      ${BOLD}${AGENT_PSK:0:4}****${NC}"
 echo -e "   ${GREEN}Configurado${NC}"
 
 # --- 4. Verificar conexion ---

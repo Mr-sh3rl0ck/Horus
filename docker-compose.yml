@@ -1,6 +1,19 @@
 # ============================================================
 # Horus SIEM — Docker Compose
 # Services: redis, server (FastAPI), dashboard (Next.js)
+#
+# CONFIGURACIÓN RÁPIDA (archivo .env en esta misma carpeta):
+#   HORUS_HOST=192.168.1.100   # IP del servidor si vas a acceder desde otra
+#                              # máquina o desde el móvil. Por defecto
+#                              # 'localhost' (todo en la misma máquina).
+#   ADMIN_PASSWORD=Horus2026!
+#   HORUS_PSK=horus-default-psk
+#   FIREBASE_ENABLED=true      # requiere ./serviceAccountKey.json
+#   FIREBASE_PROJECT_ID=mi-proyecto-firebase
+#
+# IMPORTANTE: NEXT_PUBLIC_API_URL se hornea en el bundle de Next.js durante
+# el build. Si cambias HORUS_HOST hay que reconstruir:
+#   docker compose up -d --build
 # ============================================================
 
 services:
@@ -35,8 +48,26 @@ services:
         condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
-      - ADMIN_USER=admin
-      - ADMIN_PASSWORD=Horus2026!
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-Horus2026!}
+      # Clave compartida con los agentes
+      - HORUS_PSK=${HORUS_PSK:-horus-default-psk}
+      - HORUS_REQUIRE_AGENT_PSK=${HORUS_REQUIRE_AGENT_PSK:-true}
+      # Permite que el dashboard funcione desde localhost y desde la LAN
+      - HORUS_CORS_ORIGINS=${HORUS_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://${HORUS_HOST:-localhost}:3000}
+      # Firebase Cloud Messaging (push al móvil)
+      - FIREBASE_ENABLED=${FIREBASE_ENABLED:-false}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-}
+      - FIREBASE_CREDENTIALS=/app/serviceAccountKey.json
+      - PUSH_MIN_LEVEL=${PUSH_MIN_LEVEL:-8}
+    volumes:
+      # Persiste alertas, agentes, usuarios y cola de comandos entre rebuilds.
+      # También hace que testing-mvp/seed_demo_data.py (que escribe en
+      # ./server/data/alerts.db) alcance al contenedor.
+      - ./server/data:/app/data
+      # Credenciales de Firebase. El archivo debe existir aunque no uses push
+      # (deploy.sh lo crea vacío automáticamente si falta).
+      - ./serviceAccountKey.json:/app/serviceAccountKey.json:ro
     networks:
       - horus-net
 
@@ -46,7 +77,8 @@ services:
       context: ./dashboard
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=http://localhost:5001/api
+        # Debe ser una URL alcanzable desde el NAVEGADOR, no desde el contenedor
+        - NEXT_PUBLIC_API_URL=http://${HORUS_HOST:-localhost}:5001/api
     container_name: horus-dashboard
     restart: unless-stopped
     ports:

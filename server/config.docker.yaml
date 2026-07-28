@@ -22,7 +22,10 @@ redis:
   max_queue_size: 10000
 
 auth:
+  # Override por entorno: HORUS_PSK
   psk: "horus-default-psk"
+  # Override por entorno: HORUS_REQUIRE_AGENT_PSK
+  require_agent_psk: true
 
 analysis:
   rules_path: "./rules/default_rules.yaml"

@@ -2,6 +2,7 @@
 # SQLite-backed alert persistence with FTS5 full-text search
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -24,10 +25,19 @@ class AlertStore:
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Thread-safe connection getter."""
+        """Thread-safe connection getter.
+
+        Los workers de análisis, la API y el cold storage escriben desde hilos
+        distintos. WAL permite lecturas concurrentes con una escritura, y el
+        timeout evita 'database is locked' bajo ráfagas de eventos.
+        """
         if not hasattr(_local, "conn") or _local.conn is None:
-            _local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            _local.conn.row_factory = sqlite3.Row
+            conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            _local.conn = conn
         return _local.conn
 
     def _init_db(self) -> None:
@@ -70,17 +80,33 @@ class AlertStore:
             CREATE INDEX IF NOT EXISTS idx_alerts_time ON alerts(created_at DESC)
         """)
 
-        # FTS5 table for full-text search
+        # -----------------------------------------------------------------------
+        # FTS5 full-text search
+        #
+        # Se usa una tabla FTS5 *normal* (no external-content). La variante
+        # external-content exige insertar el rowid explícitamente y mantener
+        # triggers de DELETE/UPDATE; sin ellos el índice se desincroniza en
+        # cuanto se borra una alerta (p. ej. al archivar en cold storage) y las
+        # búsquedas empiezan a devolver filas equivocadas.
+        # -----------------------------------------------------------------------
+        legacy_fts = cursor.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='alerts_fts'"
+        ).fetchone()
+
+        if legacy_fts and "content=" in (legacy_fts["sql"] or ""):
+            logger.warning("Migrando alerts_fts desde el esquema external-content...")
+            cursor.execute("DROP TRIGGER IF EXISTS alerts_ai")
+            cursor.execute("DROP TABLE IF EXISTS alerts_fts")
+            legacy_fts = None
+
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS alerts_fts USING fts5(
-                id, rule_name, rule_description, raw_log, src_ip,
-                dst_user, action, path,
-                content='alerts',
-                content_rowid='rowid'
+                id UNINDEXED, rule_name, rule_description, raw_log, src_ip,
+                dst_user, action, path
             )
         """)
 
-        # Triggers to keep FTS in sync
+        # Triggers to keep FTS in sync (insert / delete / update)
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS alerts_ai AFTER INSERT ON alerts BEGIN
                 INSERT INTO alerts_fts(id, rule_name, rule_description, raw_log,
@@ -89,6 +115,34 @@ class AlertStore:
                     new.src_ip, new.dst_user, new.action, new.path);
             END
         """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS alerts_ad AFTER DELETE ON alerts BEGIN
+                DELETE FROM alerts_fts WHERE id = old.id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS alerts_au AFTER UPDATE ON alerts BEGIN
+                DELETE FROM alerts_fts WHERE id = old.id;
+                INSERT INTO alerts_fts(id, rule_name, rule_description, raw_log,
+                    src_ip, dst_user, action, path)
+                VALUES (new.id, new.rule_name, new.rule_description, new.raw_log,
+                    new.src_ip, new.dst_user, new.action, new.path);
+            END
+        """)
+
+        # Repoblar el índice si quedó vacío tras la migración (o si la DB venía
+        # sembrada por seed_demo_data.py con el esquema antiguo).
+        fts_count = cursor.execute("SELECT COUNT(*) FROM alerts_fts").fetchone()[0]
+        alerts_count = cursor.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
+        if alerts_count and fts_count != alerts_count:
+            cursor.execute("DELETE FROM alerts_fts")
+            cursor.execute("""
+                INSERT INTO alerts_fts(id, rule_name, rule_description, raw_log,
+                    src_ip, dst_user, action, path)
+                SELECT id, rule_name, rule_description, raw_log,
+                    src_ip, dst_user, action, path FROM alerts
+            """)
+            logger.info(f"Índice FTS reconstruido con {alerts_count} alertas")
 
         # -----------------------------------------------------------------------
         # Mobile tokens table (FCM push notifications)
@@ -122,7 +176,37 @@ class AlertStore:
                 syscollector_json TEXT
             )
         """)
-        
+
+        # -----------------------------------------------------------------------
+        # Active response commands
+        #
+        # Persistir la cola de comandos (en vez de mantenerla solo en memoria)
+        # evita perder acciones pendientes si el servidor se reinicia y permite
+        # que la app móvil consulte el estado de lo que ordenó.
+        # -----------------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS commands (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                params_json TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                source TEXT,
+                alert_id TEXT,
+                created_by TEXT,
+                created_at REAL NOT NULL,
+                delivered_at REAL,
+                completed_at REAL,
+                result_json TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_commands_agent ON commands(agent_id, status)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_commands_time ON commands(created_at DESC)
+        """)
+
         # -----------------------------------------------------------------------
         # Migrations
         # -----------------------------------------------------------------------
@@ -220,20 +304,53 @@ class AlertStore:
 
         return [self._row_to_dict(row) for row in cursor.fetchall()]
 
+    @staticmethod
+    def _sanitize_fts_query(query: str) -> str:
+        """
+        Convierte texto libre en una consulta FTS5 segura.
+
+        FTS5 interpreta caracteres como `-`, `:`, `*`, `"` y `(` como sintaxis,
+        así que una búsqueda tan normal como `192.168.1.5` o `admin@host` haría
+        fallar la consulta. Cada término se escapa como frase entre comillas y
+        al último se le añade `*` para búsqueda por prefijo.
+        """
+        terms = [t for t in re.split(r"\s+", query.strip()) if t]
+        if not terms:
+            return '""'
+
+        escaped = [t.replace('"', '""') for t in terms]
+        parts = [f'"{t}"' for t in escaped[:-1]]
+        parts.append(f'"{escaped[-1]}"*')
+        return " ".join(parts)
+
     def search_alerts(self, query: str, limit: int = 50) -> List[Dict]:
         """Full-text search over alerts."""
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT alerts.* FROM alerts
-            JOIN alerts_fts ON alerts.id = alerts_fts.id
-            WHERE alerts_fts MATCH ?
-            ORDER BY alerts.created_at DESC
-            LIMIT ?
-        """, (query, limit))
+        try:
+            cursor.execute("""
+                SELECT alerts.* FROM alerts
+                JOIN alerts_fts ON alerts.id = alerts_fts.id
+                WHERE alerts_fts MATCH ?
+                ORDER BY alerts.created_at DESC
+                LIMIT ?
+            """, (self._sanitize_fts_query(query), limit))
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
-        return [self._row_to_dict(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError as e:
+            # Nunca romper la barra de búsqueda del dashboard por una consulta
+            # que FTS5 no sepa interpretar — se degrada a un LIKE simple.
+            logger.warning(f"Búsqueda FTS fallida ({e}) — usando LIKE como fallback")
+            like = f"%{query.strip()}%"
+            cursor.execute("""
+                SELECT * FROM alerts
+                WHERE rule_name LIKE ? OR rule_description LIKE ? OR raw_log LIKE ?
+                   OR src_ip LIKE ? OR dst_user LIKE ? OR path LIKE ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (like, like, like, like, like, like, limit))
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def get_alert_by_id(self, alert_id: str) -> Optional[Dict]:
         """Gets a single alert by ID."""
@@ -563,10 +680,188 @@ class AlertStore:
         return agents
     
     def delete_agent(self, agent_id: str) -> bool:
-        """Deletes an agent from the database."""
+        """Deletes an agent and its queued commands from the database."""
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
+        deleted = cursor.rowcount > 0
+        cursor.execute("DELETE FROM commands WHERE agent_id = ?", (agent_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        return deleted
+
+    # ---------------------------------------------------------------------------
+    # Active response command queue
+    # ---------------------------------------------------------------------------
+
+    def _row_to_command(self, row: sqlite3.Row) -> Dict:
+        """Converts a commands row into an API-friendly dict."""
+        d = dict(row)
+        try:
+            d["params"] = json.loads(d.pop("params_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            d["params"] = {}
+            d.pop("params_json", None)
+
+        result_json = d.pop("result_json", None)
+        if result_json:
+            try:
+                d["result"] = json.loads(result_json)
+            except (json.JSONDecodeError, TypeError):
+                d["result"] = None
+        else:
+            d["result"] = None
+
+        return d
+
+    def enqueue_command(
+        self,
+        agent_id: str,
+        action: str,
+        params: Optional[Dict] = None,
+        source: str = "api",
+        alert_id: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> Dict:
+        """
+        Persists a new active-response command for an agent.
+
+        Returns:
+            The stored command as a dict.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        command_id = f"cmd-{uuid.uuid4().hex[:12]}"
+        now = time.time()
+
+        cursor.execute("""
+            INSERT INTO commands (
+                id, agent_id, action, params_json, status,
+                source, alert_id, created_by, created_at
+            ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+        """, (
+            command_id,
+            agent_id,
+            action,
+            json.dumps(params or {}),
+            source,
+            alert_id,
+            created_by,
+            now,
+        ))
+        conn.commit()
+
+        logger.info(
+            f"Comando encolado: {command_id} agent={agent_id} "
+            f"action={action} source={source}"
+        )
+
+        return self.get_command(command_id)
+
+    def fetch_pending_commands(self, agent_id: str) -> List[Dict]:
+        """
+        Returns the pending commands for an agent and marks them as delivered.
+
+        Called by the agent's polling loop via GET /api/commands/{agent_id}.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM commands
+            WHERE agent_id = ? AND status = 'pending'
+            ORDER BY created_at ASC
+        """, (agent_id,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            return []
+
+        commands = [self._row_to_command(row) for row in rows]
+        now = time.time()
+        placeholders = ",".join("?" for _ in commands)
+        cursor.execute(
+            f"UPDATE commands SET status='delivered', delivered_at=? "
+            f"WHERE id IN ({placeholders})",
+            [now] + [c["id"] for c in commands],
+        )
+        conn.commit()
+
+        logger.info(f"{len(commands)} comando(s) entregado(s) al agente {agent_id}")
+        return commands
+
+    def record_command_result(self, command_id: str, result: Dict) -> bool:
+        """
+        Stores the execution result reported back by the agent.
+
+        Returns:
+            True if the command existed and was updated.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        status = "completed" if result.get("success") else "failed"
+        cursor.execute("""
+            UPDATE commands
+            SET status = ?, completed_at = ?, result_json = ?
+            WHERE id = ?
+        """, (status, time.time(), json.dumps(result), command_id))
+        conn.commit()
+
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Resultado registrado para {command_id}: {status}")
+        else:
+            logger.warning(f"Resultado recibido para comando desconocido: {command_id}")
+        return updated
+
+    def get_command(self, command_id: str) -> Optional[Dict]:
+        """Returns a single command by ID."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM commands WHERE id = ?", (command_id,))
+        row = cursor.fetchone()
+        return self._row_to_command(row) if row else None
+
+    def list_commands(
+        self,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict]:
+        """Returns recent commands, optionally filtered by agent and status."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = "SELECT * FROM commands WHERE 1=1"
+        params: List = []
+
+        if agent_id:
+            query += " AND agent_id = ?"
+            params.append(agent_id)
+
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        return [self._row_to_command(row) for row in cursor.fetchall()]
+
+    def count_pending_commands(self, agent_id: Optional[str] = None) -> int:
+        """Counts commands still waiting to be picked up by an agent."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        if agent_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM commands WHERE status='pending' AND agent_id = ?",
+                (agent_id,),
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM commands WHERE status='pending'")
+
+        return cursor.fetchone()[0]
 

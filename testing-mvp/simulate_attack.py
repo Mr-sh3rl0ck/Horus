@@ -19,6 +19,7 @@ Instrucciones para la PoC en vivo:
 """
 
 import json
+import os
 import time
 import sys
 import argparse
@@ -39,14 +40,23 @@ TARGET_USERS = ["root", "admin", "ubuntu"]
 INVALID_USERS = ["scanner", "hadoop", "oracle", "ftpuser", "guest"]
 
 
+# PSK del canal agente↔servidor. Debe coincidir con auth.psk del servidor.
+# Se sobreescribe con --psk o con la variable de entorno HORUS_PSK.
+PSK = os.environ.get("HORUS_PSK", "horus-default-psk")
+
+
 def send_event(server_url: str, event: dict) -> bool:
     """Envía un evento al servidor."""
     try:
         resp = requests.post(
             f"{server_url}/api/events",
             json=event,
+            headers={"X-Horus-PSK": PSK},
             timeout=5,
         )
+        if resp.status_code == 401:
+            print("   ❌ PSK inválido — usa --psk con el mismo valor que auth.psk del servidor")
+            sys.exit(1)
         return resp.status_code == 200
     except requests.ConnectionError:
         print(f"   ❌ No se pudo conectar a {server_url}")
@@ -338,11 +348,16 @@ def scenario_successful_login(server_url: str):
 # ---------------------------------------------------------------------------
 
 def main():
+    global PSK
+
     parser = argparse.ArgumentParser(description="Horus SIEM — Live Attack Simulator")
     parser.add_argument("--server", default=DEFAULT_SERVER, help=f"URL del servidor (default: {DEFAULT_SERVER})")
     parser.add_argument("--scenario", choices=["all", "brute", "fim", "syscollector", "login"], default="all",
                         help="Escenario a ejecutar (default: all)")
+    parser.add_argument("--psk", default=PSK,
+                        help="PSK compartido con el servidor (default: env HORUS_PSK o 'horus-default-psk')")
     args = parser.parse_args()
+    PSK = args.psk
 
     server_url = args.server.rstrip("/")
 

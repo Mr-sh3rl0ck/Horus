@@ -3,6 +3,7 @@
 # Active Response, Comunicación cifrada
 
 import json
+import os
 import sys
 import signal
 import logging
@@ -133,13 +134,19 @@ def main():
         credentials_path=CONFIG.get("credentials_path", "./data/agent_keys.enc"),
     )
 
+    # PSK: variable de entorno > config.json > default de desarrollo
+    psk = os.environ.get("HORUS_PSK") or CONFIG.get("auth", {}).get("psk", "horus-default-psk")
+
+    agent_name = CONFIG["agent"].get("name", "unnamed")
+
     # Intentar cargar credenciales existentes o enrollar
-    if not comm_client.load_existing_credentials():
+    if not comm_client.load_existing_credentials(psk=psk, agent_name=agent_name):
         logger.info("No hay credenciales, intentando enrollment...")
-        comm_client.enroll(
-            agent_name=CONFIG["agent"].get("name", "unnamed"),
-            psk="horus-default-psk",  # TODO: Leer PSK de variable de entorno
-        )
+        if not comm_client.enroll(agent_name=agent_name, psk=psk):
+            logger.warning(
+                "Enrollment inicial fallido — se reintentará automáticamente "
+                "en segundo plano cuando el servidor esté disponible"
+            )
 
     # Event sender (consume cola y envía al servidor)
     event_sender = EventSender(event_queue, comm_client)
@@ -207,11 +214,13 @@ def main():
             ar_handler = ActiveResponseHandler(
                 config=ar_config,
                 event_queue=event_queue,
+                comm_client=comm_client,   # habilita el polling de comandos al servidor
             )
             ar_handler.start()
             logger.info(
                 f"Active Response activo — Acciones permitidas: "
-                f"{', '.join(ar_config.get('allowed_actions', []))}"
+                f"{', '.join(ar_config.get('allowed_actions', []))} "
+                f"(polling cada {ar_config.get('poll_interval_seconds', 10)}s)"
             )
         else:
             logger.info("Active Response deshabilitado en configuración")

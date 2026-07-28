@@ -34,3 +34,12 @@ Thumbs.db
 # Firebase credentials — NEVER commit this file
 serviceAccountKey.json
 server/serviceAccountKey.json
+
+# Runtime data (SQLite, cold storage, credenciales de agentes)
+server/data/*.db
+server/data/*.db-journal
+server/data/*.db-wal
+server/data/*.db-shm
+server/data/cold_storage/
+agents/data/
+agents/logs/

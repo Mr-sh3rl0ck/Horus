@@ -108,13 +108,66 @@ export async function getHealth() {
     return request('/health');
 }
 
-// --- Commands ---
+// --- Active Response Commands ---
 
-export async function sendCommand(agentId: string, action: string, params: Record<string, unknown> = {}) {
+export type CommandStatus = 'pending' | 'delivered' | 'completed' | 'failed'
+
+export interface CommandRecord {
+    id: string
+    agent_id: string
+    action: string
+    params: Record<string, unknown>
+    status: CommandStatus
+    source: string | null
+    alert_id: string | null
+    created_by: string | null
+    created_at: number
+    delivered_at: number | null
+    completed_at: number | null
+    result: Record<string, unknown> | null
+}
+
+export interface ResponseAction {
+    id: string
+    label: string
+    description: string
+    requires: string[]
+    destructive: boolean
+}
+
+/** Encola una acción de respuesta activa. El agente la ejecutará en su próximo polling. */
+export async function sendCommand(
+    agentId: string,
+    action: string,
+    params: Record<string, unknown> = {},
+    alertId?: string,
+): Promise<{ status: string; command: CommandRecord }> {
     return request('/commands', {
         method: 'POST',
-        body: JSON.stringify({ agent_id: agentId, action, params }),
+        body: JSON.stringify({ agent_id: agentId, action, params, alert_id: alertId ?? null }),
     });
+}
+
+/** Historial de comandos con su estado de ejecución. */
+export async function getCommands({ agentId, status, limit = 50 }: {
+    agentId?: string;
+    status?: CommandStatus;
+    limit?: number;
+} = {}): Promise<{ commands: CommandRecord[]; pending: number }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (agentId) params.set('agent_id', agentId);
+    if (status) params.set('status', status);
+    return request(`/commands?${params}`);
+}
+
+/** Estado de un comando concreto — usar para hacer polling tras enviarlo. */
+export async function getCommandStatus(commandId: string): Promise<CommandRecord> {
+    return request(`/commands/${commandId}`);
+}
+
+/** Catálogo de acciones soportadas por el servidor. */
+export async function getResponseActions(): Promise<ResponseAction[]> {
+    return request('/response-actions');
 }
 
 // --- FIM ---

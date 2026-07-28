@@ -35,10 +35,17 @@ class UserStore:
     # ------------------------------------------------------------------
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Thread-safe SQLite connection."""
+        """Thread-safe SQLite connection.
+
+        Comparte archivo con AlertStore, así que usa los mismos PRAGMA para no
+        chocar con las escrituras de los workers de análisis.
+        """
         if not hasattr(_local, "user_conn") or _local.user_conn is None:
-            _local.user_conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            _local.user_conn.row_factory = sqlite3.Row
+            conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            _local.user_conn = conn
         return _local.user_conn
 
     def _init_db(self) -> None:

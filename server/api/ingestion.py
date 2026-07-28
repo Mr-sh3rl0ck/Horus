@@ -11,6 +11,8 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
+from api.deps import require_agent_psk as _require_agent_auth
+
 logger = logging.getLogger("horus.server.ingestion")
 
 router = APIRouter()
@@ -46,18 +48,16 @@ class EventPayload(BaseModel):
         extra = "allow"
 
 
-class CommandRequest(BaseModel):
-    agent_id: str
-    action: str
-    params: dict = {}
-
-
 @router.post("/events")
 async def ingest_event(request: Request, body: EventPayload):
     """
     Recibe eventos de los agentes y los coloca en la cola Redis.
     Soporta payloads cifrados (AES-GCM) y en texto plano.
+
+    Autenticado con el PSK compartido (header 'X-Horus-PSK').
     """
+    _require_agent_auth(request)
+
     redis_client = request.app.state.redis
     config = request.app.state.config
     queue_key = config.get("redis", {}).get("event_queue_key", "horus:events")
@@ -118,8 +118,7 @@ async def ingest_event(request: Request, body: EventPayload):
             request.app.state.agents[agent_id] = new_agent
             if hasattr(request.app.state, "alert_store"):
                 request.app.state.alert_store.save_agent(new_agent)
-            
-            request.app.state.pending_commands[agent_id] = []
+
             logger.info(f"Agente auto-registrado desde evento: {agent_id} IP={client_ip}")
 
         # Store latest syscollector snapshot on the agent state
@@ -148,6 +147,24 @@ async def ingest_event(request: Request, body: EventPayload):
                 f"{len(sc_snapshot.get('packages', []))} paquetes"
             )
 
+    # Resultado de una respuesta activa — cierra el ciclo del comando.
+    # No pasa por la cola de análisis: ninguna regla lo evalúa, y registrarlo
+    # de inmediato permite que la app móvil consulte el estado al instante.
+    if event_data.get("type") == "active_response_result":
+        result = event_data.get("result", {}) or {}
+        command_id = event_data.get("command_id") or result.get("command_id")
+
+        if command_id:
+            request.app.state.alert_store.record_command_result(command_id, result)
+            logger.info(
+                f"Respuesta activa reportada — command={command_id} "
+                f"action={result.get('action')} success={result.get('success')}"
+            )
+        else:
+            logger.warning("active_response_result sin command_id — se ignora")
+
+        return {"status": "accepted", "command_id": command_id}
+
     # Encolar en Redis
     if redis_client:
         try:
@@ -169,36 +186,22 @@ async def ingest_event(request: Request, body: EventPayload):
     return {"status": "accepted", "queue_size": redis_client.llen(queue_key) if redis_client else 0}
 
 
-@router.post("/commands")
-async def send_command(request: Request, body: CommandRequest):
-    """Encola un comando de respuesta activa para un agente."""
-    pending = request.app.state.pending_commands
-
-    if body.agent_id not in request.app.state.agents:
-        raise HTTPException(status_code=404, detail="Agente no encontrado")
-
-    command = {
-        "id": f"cmd-{int(time.time())}",
-        "action": body.action,
-        "params": body.params,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    }
-
-    if body.agent_id not in pending:
-        pending[body.agent_id] = []
-
-    pending[body.agent_id].append(command)
-    logger.info(f"Comando encolado para {body.agent_id}: {body.action}")
-
-    return {"status": "queued", "command_id": command["id"]}
-
-
-@router.get("/commands/{agent_id}")
+@router.get("/agent/commands/{agent_id}")
 async def get_commands(request: Request, agent_id: str):
-    """Retorna y vacía los comandos pendientes para un agente."""
-    pending = request.app.state.pending_commands
+    """
+    Retorna los comandos pendientes para un agente y los marca como entregados.
 
-    commands = pending.get(agent_id, [])
-    pending[agent_id] = []  # Vaciar cola
+    Lo consume el hilo de polling del agente (ActiveResponseHandler). La cola
+    vive en SQLite, así que sobrevive a reinicios del servidor.
+
+    Va bajo el prefijo /agent/ para separar el canal agente↔servidor (que se
+    autentica con el PSK compartido) del canal de consola /api/commands/*
+    (que usa tokens de sesión), y para que /api/commands/{command_id} no quede
+    capturado por esta ruta.
+    """
+    _require_agent_auth(request)
+
+    alert_store = request.app.state.alert_store
+    commands = alert_store.fetch_pending_commands(agent_id)
 
     return {"commands": commands}

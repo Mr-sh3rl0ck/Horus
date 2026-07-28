@@ -38,8 +38,11 @@
     },
     "active_response": {
         "enabled": true,
-        "poll_interval_seconds": 10,
-        "allowed_actions": ["block_ip", "kill_process"]
+        "poll_interval_seconds": 5,
+        "allowed_actions": ["block_ip", "unblock_ip", "kill_process", "isolate", "unisolate"]
+    },
+    "auth": {
+        "psk": "horus-default-psk"
     },
     "credentials_path": "./data/agent_keys.enc",
     "logging": {

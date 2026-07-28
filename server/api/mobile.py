@@ -9,25 +9,46 @@
 # donde <token> es el obtenido con POST /api/auth/login
 #
 # ENDPOINTS DISPONIBLES:
-#   POST   /api/mobile/register-token      Registrar token FCM del dispositivo
-#   DELETE /api/mobile/unregister-token    Eliminar token FCM al cerrar sesión
-#   GET    /api/mobile/tokens              Listar tokens registrados (admin)
-#   POST   /api/mobile/test-push           Enviar push de prueba a un token
-#   GET    /api/mobile/alerts              Lista de alertas optimizada para móvil
-#   GET    /api/mobile/alerts/{alert_id}   Detalle completo de una alerta
-#   POST   /api/mobile/respond             Enviar acción de respuesta al agente
-#   GET    /api/mobile/dashboard-summary   Resumen compacto para widget del dashboard
+#   POST   /api/mobile/register-token       Registrar token FCM del dispositivo
+#   DELETE /api/mobile/unregister-token     Eliminar token FCM al cerrar sesión
+#   GET    /api/mobile/tokens               Listar tokens registrados (admin)
+#   POST   /api/mobile/test-push            Enviar push de prueba a un token
+#   GET    /api/mobile/alerts               Lista de alertas optimizada para móvil
+#   GET    /api/mobile/alerts/{alert_id}    Detalle completo de una alerta
+#   POST   /api/mobile/respond              Enviar acción de respuesta al agente
+#   GET    /api/mobile/commands             Historial de respuestas activas
+#   GET    /api/mobile/commands/{cmd_id}    Estado de un comando enviado
+#   GET    /api/mobile/response-actions     Catálogo de acciones disponibles
+#   GET    /api/mobile/dashboard-summary    Resumen compacto para widget del dashboard
+#
+# ROLES:
+#   Lectura (alertas, resumen, estado de comandos) → cualquier rol autenticado.
+#   POST /api/mobile/respond                       → solo 'admin' o 'soc_analyst'.
+#   GET  /api/mobile/tokens                        → solo 'admin'.
 
 import time
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from pydantic import BaseModel
+
+from api.deps import get_current_session, require_role
+from services.response_actions import (
+    ACTION_CATALOG,
+    ALLOWED_ACTIONS,
+    suggest_actions,
+    validate_action_params,
+)
 
 logger = logging.getLogger("horus.server.mobile")
 
 router = APIRouter()
+
+# Roles autorizados a ejecutar respuesta activa desde el móvil.
+# Un 'viewer' puede consultar alertas, pero no actuar sobre un endpoint.
+_responder_only = Depends(require_role("admin", "soc_analyst"))
+_admin_only = Depends(require_role("admin"))
 
 
 # ---------------------------------------------------------------------------
@@ -38,27 +59,11 @@ def _require_auth(request: Request) -> dict:
     """
     Verifica que el request tenga un Bearer token válido en el header Authorization.
     Retorna los datos de la sesión si es válido, lanza HTTPException 401 si no.
+
+    Delega en `api.deps.get_current_session` para que móvil y dashboard
+    compartan exactamente la misma validación de sesión.
     """
-    from api.auth import _sessions
-
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Token de autenticación requerido. Usa el header: Authorization: Bearer <token>",
-        )
-
-    token = auth_header.replace("Bearer ", "").strip()
-    session = _sessions.get(token)
-
-    if not session:
-        raise HTTPException(status_code=401, detail="Token inválido o expirado.")
-
-    if time.time() > session.get("expires_at", 0):
-        _sessions.pop(token, None)
-        raise HTTPException(status_code=401, detail="Token expirado. Vuelve a hacer login.")
-
-    return session
+    return get_current_session(request)
 
 
 # ---------------------------------------------------------------------------
@@ -195,11 +200,13 @@ async def unregister_token(request: Request, body: UnregisterTokenRequest):
     }
 
 
-@router.get("/mobile/tokens")
+@router.get("/mobile/tokens", dependencies=[_admin_only])
 async def list_tokens(request: Request):
     """
     Lista todos los tokens FCM registrados con sus metadatos.
     Útil para administración y debugging desde la app o el dashboard.
+
+    **Requiere rol `admin`.**
 
     ---
     **Response:**
@@ -433,7 +440,7 @@ async def get_mobile_alert_detail(request: Request, alert_id: str):
     result["severity_label"] = _severity_label(alert.get("level", 0))
     result["time_ago"] = round(now - (alert.get("created_at") or now), 1)
     result["can_block"] = bool(alert.get("src_ip"))
-    result["suggested_actions"] = _suggest_actions(alert)
+    result["suggested_actions"] = suggest_actions(alert)
 
     return result
 
@@ -443,7 +450,11 @@ async def get_mobile_alert_detail(request: Request, alert_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/mobile/respond")
-async def mobile_respond(request: Request, body: RespondRequest):
+async def mobile_respond(
+    request: Request,
+    body: RespondRequest,
+    session: dict = _responder_only,
+):
     """
     Envía un comando de respuesta activa al agente afectado.
 
@@ -460,8 +471,12 @@ async def mobile_respond(request: Request, body: RespondRequest):
     | action        | params requeridos          | descripción                          |
     |---------------|---------------------------|--------------------------------------|
     | `block_ip`    | `{"ip": "x.x.x.x"}`       | Bloquea la IP origen en el firewall  |
-    | `kill_process`| `{"pid": 1234}`            | Mata el proceso por PID              |
+    | `unblock_ip`  | `{"ip": "x.x.x.x"}`       | Revierte el bloqueo de una IP        |
+    | `kill_process`| `{"pid": 1234}` o `{"name": "x"}` | Mata el proceso              |
     | `isolate`     | `{}`                       | Aísla el agente de la red            |
+    | `unisolate`   | `{}`                       | Restaura la conectividad del agente  |
+
+    **Requiere rol `admin` o `soc_analyst`.** Un `viewer` recibe 403.
 
     **Request:**
     ```json
@@ -477,37 +492,24 @@ async def mobile_respond(request: Request, body: RespondRequest):
     ```json
     {
       "status": "queued",
-      "command_id": "cmd-1690000000",
+      "command_id": "cmd-9f2a1b3c4d5e",
       "agent_id": "a1b2c3d4",
       "action": "block_ip",
-      "message": "Comando encolado. El agente lo ejecutará en su próximo ciclo."
+      "message": "Comando encolado. El agente lo ejecutará en su próximo ciclo.",
+      "poll_url": "/api/mobile/commands/cmd-9f2a1b3c4d5e"
     }
     ```
-    """
-    _require_auth(request)
 
-    # Validar acción permitida
-    ALLOWED_ACTIONS = {"block_ip", "kill_process", "isolate"}
+    Consulta `poll_url` para saber si el agente ya lo ejecutó.
+    """
+    # Validar acción contra el catálogo compartido con el dashboard y el agente
     if body.action not in ALLOWED_ACTIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Acción '{body.action}' no válida. Acciones permitidas: {sorted(ALLOWED_ACTIONS)}",
         )
 
-    # Validar parámetros requeridos por acción
-    if body.action == "block_ip":
-        if not body.params.get("ip"):
-            raise HTTPException(
-                status_code=400,
-                detail="La acción 'block_ip' requiere el parámetro 'ip'.",
-            )
-
-    if body.action == "kill_process":
-        if not body.params.get("pid") and not body.params.get("name"):
-            raise HTTPException(
-                status_code=400,
-                detail="La acción 'kill_process' requiere 'pid' o 'name' en params.",
-            )
+    validate_action_params(body.action, body.params)
 
     # Verificar que el agente existe
     agents = request.app.state.agents
@@ -517,26 +519,20 @@ async def mobile_respond(request: Request, body: RespondRequest):
             detail=f"Agente '{body.agent_id}' no encontrado. Verifica el agent_id.",
         )
 
-    # Construir y encolar el comando
-    pending = request.app.state.pending_commands
-    command = {
-        "id": f"cmd-{int(time.time())}",
-        "action": body.action,
-        "params": body.params,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "source": "mobile",                           # Origen del comando
-        "alert_id": body.alert_id,                    # Trazabilidad con la alerta
-    }
-
-    if body.agent_id not in pending:
-        pending[body.agent_id] = []
-
-    pending[body.agent_id].append(command)
+    # Encolar el comando en SQLite (sobrevive a reinicios del servidor)
+    command = request.app.state.alert_store.enqueue_command(
+        agent_id=body.agent_id,
+        action=body.action,
+        params=body.params,
+        source="mobile",
+        alert_id=body.alert_id,
+        created_by=session.get("username"),
+    )
 
     logger.info(
         f"[Mobile] Comando de respuesta encolado — "
         f"agent={body.agent_id} action={body.action} params={body.params} "
-        f"alert_id={body.alert_id}"
+        f"alert_id={body.alert_id} por={session.get('username')}"
     )
 
     return {
@@ -545,7 +541,106 @@ async def mobile_respond(request: Request, body: RespondRequest):
         "agent_id": body.agent_id,
         "action": body.action,
         "message": "Comando encolado. El agente lo ejecutará en su próximo ciclo de polling.",
+        "poll_url": f"/api/mobile/commands/{command['id']}",
     }
+
+
+@router.get("/mobile/commands/{command_id}")
+async def get_mobile_command_status(request: Request, command_id: str):
+    """
+    Consulta el estado de un comando de respuesta activa.
+
+    La app debe llamar este endpoint tras enviar `POST /mobile/respond` para
+    mostrarle al operador si la acción ya se ejecutó en el endpoint.
+
+    ---
+    **Estados posibles:**
+
+    | status      | significado                                        |
+    |-------------|----------------------------------------------------|
+    | `pending`   | Encolado, el agente aún no lo ha recogido          |
+    | `delivered` | El agente lo recogió y lo está ejecutando          |
+    | `completed` | Ejecutado correctamente                            |
+    | `failed`    | El agente lo intentó pero falló (ver `result`)     |
+
+    **Response:**
+    ```json
+    {
+      "id": "cmd-9f2a1b3c4d5e",
+      "agent_id": "a1b2c3d4",
+      "action": "block_ip",
+      "params": {"ip": "192.168.1.5"},
+      "status": "completed",
+      "source": "mobile",
+      "alert_id": "abc123",
+      "created_at": 1690000000.0,
+      "delivered_at": 1690000005.0,
+      "completed_at": 1690000006.0,
+      "result": {"action": "block_ip", "target": "192.168.1.5", "success": true}
+    }
+    ```
+    """
+    _require_auth(request)
+
+    command = request.app.state.alert_store.get_command(command_id)
+    if not command:
+        raise HTTPException(status_code=404, detail="Comando no encontrado.")
+
+    return command
+
+
+@router.get("/mobile/commands")
+async def list_mobile_commands(
+    request: Request,
+    agent_id: Optional[str] = Query(None, description="Filtrar por agente"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """
+    Historial reciente de comandos de respuesta activa.
+
+    Útil para una pantalla de "acciones recientes" en la app.
+
+    ---
+    **Response:**
+    ```json
+    {
+      "total": 3,
+      "commands": [ { "id": "cmd-...", "action": "block_ip", "status": "completed" } ]
+    }
+    ```
+    """
+    _require_auth(request)
+
+    commands = request.app.state.alert_store.list_commands(
+        agent_id=agent_id, limit=limit
+    )
+    return {"total": len(commands), "commands": commands}
+
+
+@router.get("/mobile/response-actions")
+async def get_mobile_response_actions(request: Request):
+    """
+    Catálogo de acciones de respuesta activa que soporta el servidor.
+
+    La app puede usarlo para construir dinámicamente los botones de acción
+    en lugar de tenerlos hardcodeados.
+
+    ---
+    **Response:**
+    ```json
+    [
+      {
+        "id": "block_ip",
+        "label": "Bloquear IP",
+        "description": "Bloquea la IP origen en el firewall del endpoint.",
+        "requires": ["ip"],
+        "destructive": false
+      }
+    ]
+    ```
+    """
+    _require_auth(request)
+    return [{"id": key, **meta} for key, meta in ACTION_CATALOG.items()]
 
 
 # ---------------------------------------------------------------------------
@@ -579,11 +674,22 @@ async def get_dashboard_summary(request: Request):
         "enabled": false,
         "registered_devices": 1
       },
+      "commands": {
+        "pending": 0
+      },
+      "session": {
+        "username": "admin",
+        "role": "admin",
+        "can_respond": true
+      },
       "server_time": "2026-06-21T14:00:00+0000"
     }
     ```
+
+    `session.can_respond` indica si el rol del usuario puede ejecutar acciones
+    de respuesta activa — úsalo para mostrar u ocultar los botones en la UI.
     """
-    _require_auth(request)
+    session = _require_auth(request)
 
     alert_store = request.app.state.alert_store
     agents = request.app.state.agents
@@ -611,6 +717,15 @@ async def get_dashboard_summary(request: Request):
             "enabled": push_service.is_enabled if push_service else False,
             "registered_devices": len(tokens),
         },
+        "commands": {
+            "pending": alert_store.count_pending_commands(),
+        },
+        "session": {
+            "username": session.get("username"),
+            "role": session.get("role"),
+            # La app puede ocultar los botones de acción si es false
+            "can_respond": session.get("role") in ("admin", "soc_analyst"),
+        },
         "server_time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
 
@@ -628,19 +743,3 @@ def _severity_label(level: int) -> str:
     if level >= 4:
         return "Medium"
     return "Low"
-
-
-def _suggest_actions(alert: dict) -> list:
-    """
-    Sugiere acciones de respuesta basadas en el tipo y datos de la alerta.
-    La app puede usar esto para mostrar botones de acción contextual.
-    """
-    actions = []
-    if alert.get("src_ip"):
-        actions.append("block_ip")
-    event_type = alert.get("event_type", "")
-    if event_type in ("process", "malware"):
-        actions.append("kill_process")
-    if alert.get("level", 0) >= 12:
-        actions.append("isolate")
-    return actions

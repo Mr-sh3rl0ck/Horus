@@ -45,10 +45,28 @@ interface NavItemProps {
     isActive?: boolean
     children?: { label: string; href: string }[]
     onClick?: () => void
+    /** Módulo en el roadmap pero sin pantalla todavía: se muestra deshabilitado. */
+    comingSoon?: boolean
 }
 
-function NavItem({ icon, label, href = "#", isActive, children, onClick }: NavItemProps) {
+function NavItem({ icon, label, href = "#", isActive, children, onClick, comingSoon }: NavItemProps) {
     const [isOpen, setIsOpen] = useState(false)
+
+    // Sin pantalla asociada — no debe parecer clickeable
+    if (comingSoon) {
+        return (
+            <div
+                className="flex cursor-not-allowed items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground/40"
+                title="Módulo en desarrollo"
+            >
+                {icon}
+                <span className="flex-1">{label}</span>
+                <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                    Soon
+                </span>
+            </div>
+        )
+    }
 
     if (children) {
         return (
@@ -280,7 +298,7 @@ export function Sidebar({ currentPage = "overview", onNavigate, onLogout, role =
                                     />
                                 )}
                                 {can("threats") && (
-                                    <NavItem icon={<Activity className="h-4 w-4" />} label="MITRE ATT&CK" />
+                                    <NavItem icon={<Activity className="h-4 w-4" />} label="MITRE ATT&CK" comingSoon />
                                 )}
                             </div>
                         )}
@@ -291,11 +309,11 @@ export function Sidebar({ currentPage = "overview", onNavigate, onLogout, role =
                                 <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                     Compliance
                                 </p>
-                                <NavItem icon={<ShieldCheck className="h-4 w-4" />} label="PCI DSS" />
-                                <NavItem icon={<Lock className="h-4 w-4" />} label="GDPR" />
-                                <NavItem icon={<FileWarning className="h-4 w-4" />} label="HIPAA" />
+                                <NavItem icon={<ShieldCheck className="h-4 w-4" />} label="PCI DSS" comingSoon />
+                                <NavItem icon={<Lock className="h-4 w-4" />} label="GDPR" comingSoon />
+                                <NavItem icon={<FileWarning className="h-4 w-4" />} label="HIPAA" comingSoon />
                                 {can("reports") && (
-                                    <NavItem icon={<BarChart3 className="h-4 w-4" />} label="Reportes" />
+                                    <NavItem icon={<BarChart3 className="h-4 w-4" />} label="Reportes" comingSoon />
                                 )}
                             </div>
                         )}
@@ -312,7 +330,7 @@ export function Sidebar({ currentPage = "overview", onNavigate, onLogout, role =
                                     isActive={currentPage === "users"}
                                     onClick={() => nav("users")}
                                 />
-                                <NavItem icon={<Database className="h-4 w-4" />} label="Indexer" />
+                                <NavItem icon={<Database className="h-4 w-4" />} label="Indexer" comingSoon />
                             </div>
                         )}
                     </div>

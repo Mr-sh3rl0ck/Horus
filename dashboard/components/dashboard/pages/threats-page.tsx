@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DataTable } from "@/components/dashboard/data-table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { RefreshCw, ExternalLink, Filter } from "lucide-react"
+import { RefreshCw, ExternalLink, Filter, Ban } from "lucide-react"
 import {
     AreaChart,
     Area,
@@ -18,6 +18,7 @@ import {
     Tooltip,
 } from "recharts"
 import { getAlerts } from "@/lib/api"
+import { ResponseActionDialog } from "@/components/dashboard/response-action-dialog"
 
 const emptyTimeline = [
     { time: "00:00", count: 0 },
@@ -29,6 +30,7 @@ const emptyTimeline = [
 ]
 
 interface ThreatEvent {
+    id: string
     timestamp: string
     agent: string
     rule: string
@@ -37,6 +39,7 @@ interface ThreatEvent {
     tactic: string
     technique: string
     description: string
+    srcIp: string | null
 }
 
 
@@ -77,12 +80,15 @@ export function ThreatsPage() {
     const [threatEvents, setThreatEvents] = useState<ThreatEvent[]>([])
     const [eventsTimelineData, setEventsTimelineData] = useState(emptyTimeline)
     const [loading, setLoading] = useState(true)
+    const [blockTarget, setBlockTarget] = useState<ThreatEvent | null>(null)
 
     const fetchAlerts = useCallback(async () => {
         try {
             const res = await getAlerts({ limit: 50, type: "threat" })
             if (res && res.alerts && res.alerts.length > 0) {
                 const events: ThreatEvent[] = res.alerts.map((alert: any) => ({
+                    id: alert.id,
+                    srcIp: alert.src_ip || null,
                     timestamp: alert.timestamp
                         ? new Date(alert.timestamp * 1000).toLocaleString("en-US", {
                             month: "short", day: "numeric", year: "numeric",
@@ -167,6 +173,24 @@ export function ThreatsPage() {
             render: (item: ThreatEvent) => (
                 <span className="line-clamp-1 max-w-xs text-sm">{item.description}</span>
             ),
+        },
+        {
+            key: "response",
+            header: "Response",
+            render: (item: ThreatEvent) =>
+                item.srcIp ? (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 border-high/30 bg-high/10 text-high hover:bg-high/20"
+                        onClick={() => setBlockTarget(item)}
+                    >
+                        <Ban className="h-3.5 w-3.5" />
+                        Bloquear IP
+                    </Button>
+                ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                ),
         },
     ]
 
@@ -347,6 +371,20 @@ export function ThreatsPage() {
                 showFilters
                 showExport
             />
+
+            {/* ===== Active Response: bloquear la IP origen de la alerta ===== */}
+            {blockTarget?.srcIp && (
+                <ResponseActionDialog
+                    open={!!blockTarget}
+                    onOpenChange={(open) => !open && setBlockTarget(null)}
+                    agentId={blockTarget.agent}
+                    agentName={blockTarget.agent}
+                    action="block_ip"
+                    actionLabel="Bloquear IP en el firewall"
+                    params={{ ip: blockTarget.srcIp }}
+                    alertId={blockTarget.id}
+                />
+            )}
         </div>
     )
 }

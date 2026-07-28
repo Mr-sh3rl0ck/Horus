@@ -49,11 +49,17 @@
     },
     "active_response": {
         "enabled": true,
-        "poll_interval_seconds": 10,
+        "poll_interval_seconds": 5,
         "allowed_actions": [
             "block_ip",
-            "kill_process"
+            "unblock_ip",
+            "kill_process",
+            "isolate",
+            "unisolate"
         ]
+    },
+    "auth": {
+        "psk": "horus-default-psk"
     },
     "credentials_path": "./data/agent_keys.enc",
     "logging": {

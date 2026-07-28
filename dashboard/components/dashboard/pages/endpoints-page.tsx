@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DataTable } from "@/components/dashboard/data-table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Plus, RefreshCw, MoreHorizontal, Eye, Trash2, Info, Copy, Check } from "lucide-react"
+import { Plus, RefreshCw, MoreHorizontal, Eye, Trash2, Info, Copy, Check, ShieldOff, Wifi } from "lucide-react"
 import {
     PieChart,
     Pie,
@@ -27,6 +27,15 @@ import {
     DialogFooter,
 } from "@/components/ui/dialog"
 import { getAgents, getAgent, deleteAgent, API_BASE } from "@/lib/api"
+import { ResponseActionDialog } from "@/components/dashboard/response-action-dialog"
+
+/** Acción de respuesta activa pendiente de confirmar en el diálogo. */
+interface PendingResponse {
+    agent: Agent
+    action: string
+    label: string
+    warning?: string
+}
 
 
 interface Agent {
@@ -145,6 +154,7 @@ export function EndpointsPage() {
     const [removeAgent, setRemoveAgent] = useState<Agent | null>(null)
     const [removeOpen, setRemoveOpen] = useState(false)
     const [copied, setCopied] = useState(false)
+    const [pendingResponse, setPendingResponse] = useState<PendingResponse | null>(null)
 
     const fetchAgents = useCallback(async () => {
         try {
@@ -359,6 +369,36 @@ export function EndpointsPage() {
                             </DropdownMenuItem>
                             <div className="my-1 h-px bg-border" />
                             <DropdownMenuItem
+                                className="text-high cursor-pointer"
+                                onClick={() =>
+                                    setPendingResponse({
+                                        agent,
+                                        action: "isolate",
+                                        label: "Aislar endpoint",
+                                        warning:
+                                            "El endpoint quedará sin red salvo la conexión con Horus. " +
+                                            "Podrás revertirlo con 'Reconectar endpoint'.",
+                                    })
+                                }
+                            >
+                                <ShieldOff className="mr-2 h-4 w-4" />
+                                Aislar endpoint
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                                className="text-foreground cursor-pointer"
+                                onClick={() =>
+                                    setPendingResponse({
+                                        agent,
+                                        action: "unisolate",
+                                        label: "Reconectar endpoint",
+                                    })
+                                }
+                            >
+                                <Wifi className="mr-2 h-4 w-4" />
+                                Reconectar endpoint
+                            </DropdownMenuItem>
+                            <div className="my-1 h-px bg-border" />
+                            <DropdownMenuItem
                                 className="text-critical cursor-pointer"
                                 onClick={() => {
                                     setRemoveAgent(agent)
@@ -531,6 +571,19 @@ export function EndpointsPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* ===== Active Response Dialog ===== */}
+            {pendingResponse && (
+                <ResponseActionDialog
+                    open={!!pendingResponse}
+                    onOpenChange={(open) => !open && setPendingResponse(null)}
+                    agentId={pendingResponse.agent.id}
+                    agentName={pendingResponse.agent.name}
+                    action={pendingResponse.action}
+                    actionLabel={pendingResponse.label}
+                    warning={pendingResponse.warning}
+                />
+            )}
         </div>
     )
 }

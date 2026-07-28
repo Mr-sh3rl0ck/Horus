@@ -19,7 +19,14 @@ redis:
   max_queue_size: 10000
 
 auth:
+  # Clave compartida agente ↔ servidor. Se usa para el enrollment, para cifrar
+  # los eventos (AES-GCM) y para autenticar el canal /api/events y
+  # /api/agent/commands/* mediante el header 'X-Horus-PSK'.
+  # Override por entorno: HORUS_PSK
   psk: "horus-default-psk"
+  # Exige el header 'X-Horus-PSK' en el canal de agentes.
+  # Override por entorno: HORUS_REQUIRE_AGENT_PSK
+  require_agent_psk: true
 
 analysis:
   rules_path: "./rules/default_rules.yaml"

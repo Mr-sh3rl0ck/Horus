@@ -67,12 +67,9 @@ async def enroll_agent(request: Request, body: EnrollRequest):
         "status": "active",
     }
     agents[agent_id] = new_agent
-    
+
     if hasattr(request.app.state, "alert_store"):
         request.app.state.alert_store.save_agent(new_agent)
-
-    # Inicializar cola de comandos
-    request.app.state.pending_commands[agent_id] = []
 
     logger.info(f"Agente enrollado: {body.agent_name} -> ID={agent_id} IP={client_ip}")
 
