@@ -182,14 +182,16 @@ Colores sugeridos:
 ### Refresco
 
 Haz polling cada 10-15 s con `offset=0` mientras la pantalla esté visible.
-No hay websockets.
+No hay websockets ni notificaciones push: **esta lista es el único canal de
+entrega de alertas**. Para avisar de alertas nuevas, compara el `id` de la
+primera alerta con el de la consulta anterior.
 
 ---
 
 ## 3. Detalle de una alerta
 
-Solo hace falta al abrir desde una notificación push. Para la lista y el botón
-ya tienes todo lo necesario en el paso anterior.
+Solo hace falta si quieres una pantalla de detalle al tocar una alerta de la
+lista. Para la lista y el botón ya tienes todo lo necesario en el paso anterior.
 
 ### Envías
 
@@ -224,108 +226,7 @@ Si la alerta no existe: `404`.
 
 ---
 
-## 4. Notificaciones push (FCM)
-
-Solo se envían alertas de **nivel ≥ 8** (`High` y `Critical`).
-
-### 4.1 Registrar el token
-
-Llámalo **al hacer login**, **al abrir la app** y en **`onNewToken()`**:
-
-```http
-POST /api/mobile/register-token
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-```json
-{
-  "token": "<token_fcm_del_dispositivo>",
-  "platform": "android",
-  "label": "admin"
-}
-```
-
-Recibes:
-
-```json
-{
-  "status": "registered",
-  "message": "Token FCM registrado correctamente.",
-  "push_enabled": true
-}
-```
-
-Si `push_enabled` es `false`, el servidor no tiene Firebase configurado y no
-llegarán notificaciones (todo lo demás sigue funcionando).
-
-### 4.2 Al cerrar sesión
-
-```http
-DELETE /api/mobile/unregister-token
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-```json
-{ "token": "<token_fcm_del_dispositivo>" }
-```
-
-> **Retrofit:** un `DELETE` con cuerpo necesita
-> `@HTTP(method = "DELETE", path = "mobile/unregister-token", hasBody = true)`.
-> La anotación `@DELETE` normal no manda body.
-
-### 4.3 Canal de notificaciones — obligatorio
-
-El servidor manda las push con `channel_id = "horus_alerts"`. **Si no creas ese
-canal exacto, Android descarta la notificación en segundo plano.**
-
-```kotlin
-val channel = NotificationChannel(
-    "horus_alerts",                          // este ID exacto
-    "Alertas Horus",
-    NotificationManager.IMPORTANCE_HIGH
-)
-getSystemService(NotificationManager::class.java)
-    .createNotificationChannel(channel)
-```
-
-### 4.4 Qué recibes en la push
-
-**Notificación visible:**
-
-| | |
-|---|---|
-| `title` | `⚠️ Alerta Horus [12]` |
-| `body` | `SSH Brute Force Detected — Agente: a1b2c3d4` |
-
-**Payload `data`** — ⚠️ **todos los valores son strings**, incluso los números
-y booleanos (es una restricción de FCM):
-
-```json
-{
-  "alert_id": "abc123def456",
-  "rule_id": "COR-001",
-  "rule_name": "SSH Brute Force Detected",
-  "level": "12",
-  "event_type": "log",
-  "agent_id": "a1b2c3d4",
-  "src_ip": "185.220.101.42",
-  "action": "failed_login",
-  "timestamp": "1690000000.0",
-  "can_block": "true"
-}
-```
-
-```kotlin
-val alertId = remoteMessage.data["alert_id"]
-val nivel   = remoteMessage.data["level"]?.toIntOrNull() ?: 0
-val puedeBloquear = remoteMessage.data["can_block"] == "true"   // string, no bool
-```
-
-Al tocar la notificación: abre el detalle con `GET /api/mobile/alerts/{alert_id}`.
-
----
-
-## 5. El botón de mitigar
+## 4. El botón de mitigar
 
 Son **3 pasos**: envías la acción → recibes un `command_id` → consultas hasta
 saber si se ejecutó.
@@ -334,7 +235,7 @@ El servidor solo **encola** el comando. Quien lo ejecuta es el agente instalado
 en el equipo afectado, que consulta al servidor cada 5 s. Por eso hace falta el
 paso 3: la respuesta inmediata no significa que ya esté hecho.
 
-### 5.1 Qué acción manda el botón
+### 4.1 Qué acción manda el botón
 
 Con un solo botón, decide así:
 
@@ -356,7 +257,7 @@ val accion = when {
 `isolate` corta toda la red del equipo salvo su conexión con Horus — **pide
 confirmación explícita** antes de mandarla.
 
-### 5.2 Paso 1 — Enviar
+### 4.2 Paso 1 — Enviar
 
 ```http
 POST /api/mobile/respond
@@ -375,8 +276,8 @@ Content-Type: application/json
 | Campo | Tipo | Obligatorio | De dónde sale |
 |---|---|---|---|
 | `agent_id` | string | Sí | `alerta.agent_id` |
-| `action` | string | Sí | Tabla de 5.1 |
-| `params` | objeto | Sí (puede ir `{}`) | Tabla de 5.1 |
+| `action` | string | Sí | Tabla de 4.1 |
+| `params` | objeto | Sí (puede ir `{}`) | Tabla de 4.1 |
 | `alert_id` | string | No | `alerta.id`. Para trazabilidad — mándalo |
 
 **Recibes:**
@@ -394,7 +295,7 @@ Content-Type: application/json
 
 **Guarda `command_id`.** Sin él no puedes saber si la mitigación funcionó.
 
-### 5.3 Paso 2 — Consultar el estado
+### 4.3 Paso 2 — Consultar el estado
 
 ```http
 GET /api/mobile/commands/cmd-9f2a1b3c4d5e
@@ -424,7 +325,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 5.4 Los 4 estados
+### 4.4 Los 4 estados
 
 | `status` | Significado | Qué mostrar |
 |---|---|---|
@@ -439,7 +340,7 @@ Cuando es `failed`, el motivo está en `result.error`:
 { "status": "failed", "result": { "success": false, "error": "sin permisos" } }
 ```
 
-### 5.5 Paso 3 — El polling
+### 4.5 Paso 3 — El polling
 
 ```kotlin
 // Consulta cada 2 s; para al llegar a completed/failed.
@@ -456,7 +357,7 @@ repeat(30) {
 que ese es el retardo mínimo. Si se queda en `pending` más de un minuto, el
 agente de ese equipo no está corriendo.
 
-### 5.6 Acciones disponibles (referencia)
+### 4.6 Acciones disponibles (referencia)
 
 | `action` | `params` | Reversible con |
 |---|---|---|
@@ -471,7 +372,7 @@ botón de deshacer).
 
 ---
 
-## 6. Errores
+## 5. Errores
 
 | Código | Qué pasó | Qué hacer en la app |
 |---|---|---|
@@ -489,7 +390,7 @@ El cuerpo del error siempre trae el motivo en `detail`:
 
 ---
 
-## 7. Resumen para la pantalla principal (opcional)
+## 6. Resumen para la pantalla principal (opcional)
 
 Si quieres una cabecera con contadores:
 
@@ -504,7 +405,6 @@ Authorization: Bearer <token>
     "medium": 45, "low": 1190, "last_24h": 28
   },
   "agents": { "total": 5, "active": 4, "disconnected": 1 },
-  "push": { "enabled": true, "registered_devices": 2 },
   "commands": { "pending": 0 },
   "session": { "username": "admin", "role": "admin", "can_respond": true },
   "server_time": "2026-07-27T14:00:00+0000"
@@ -516,7 +416,7 @@ te evita duplicar la lógica de roles en la app.
 
 ---
 
-## 8. Checklist
+## 7. Checklist
 
 - [ ] Base URL con la **IP del servidor**, no `localhost` (el teléfono no
       resuelve el `localhost` del PC).
@@ -524,10 +424,7 @@ te evita duplicar la lógica de roles en la app.
 - [ ] Manejo global del `401` → limpiar sesión y volver al login.
 - [ ] Campos `src_ip` y `path` declarados como **nullable**.
 - [ ] `time_ago` y `severity_label` usados tal cual, sin recalcular.
-- [ ] Canal `horus_alerts` creado al arrancar la app.
-- [ ] `register-token` en login, arranque y `onNewToken`.
-- [ ] `unregister-token` en el logout.
-- [ ] Valores del payload `data` de la push leídos **como string**.
+- [ ] Polling de la lista cada 10-15 s con `offset=0` mientras esté visible.
 - [ ] Botón oculto si el rol no es `admin` ni `soc_analyst`.
 - [ ] `command_id` guardado y consultado tras cada mitigación.
 - [ ] Confirmación explícita antes de `isolate`.
@@ -535,23 +432,18 @@ te evita duplicar la lógica de roles en la app.
 
 ---
 
-## 9. Si algo no funciona
+## 8. Si algo no funciona
 
 | Síntoma | Causa habitual |
 |---|---|
 | No conecta desde el móvil | Base URL con `localhost`, o el firewall del PC bloquea los puertos 3000/5001 |
 | Login `401` con credenciales buenas | Contraseña regenerada al reiniciar el servidor: `docker logs horus-server \| grep Password` |
-| No llegan push | Firebase sin configurar. Comprueba `push.enabled` en `dashboard-summary` |
-| Push solo llega con la app abierta | Falta el canal `horus_alerts` |
+| No aparecen alertas nuevas | La app no está haciendo polling con `offset=0`, o no hay eventos llegando al servidor |
 | El comando se queda en `pending` | El agente de ese equipo no está corriendo |
 | El comando sale `failed` | Mira `result.error`. Lo más común: el agente necesita root para tocar el firewall |
 
-Para probar el push sin esperar a una alerta real:
+Para generar alertas de prueba sin esperar un ataque real:
 
-```http
-POST /api/mobile/test-push
-Authorization: Bearer <token>
-```
-```json
-{ "token": "<token_fcm_del_dispositivo>" }
+```bash
+python testing-mvp/simulate_attack.py --server http://192.168.0.10:5001
 ```

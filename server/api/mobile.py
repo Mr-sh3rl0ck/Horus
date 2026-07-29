@@ -9,10 +9,6 @@
 # donde <token> es el obtenido con POST /api/auth/login
 #
 # ENDPOINTS DISPONIBLES:
-#   POST   /api/mobile/register-token       Registrar token FCM del dispositivo
-#   DELETE /api/mobile/unregister-token     Eliminar token FCM al cerrar sesión
-#   GET    /api/mobile/tokens               Listar tokens registrados (admin)
-#   POST   /api/mobile/test-push            Enviar push de prueba a un token
 #   GET    /api/mobile/alerts               Lista de alertas optimizada para móvil
 #   GET    /api/mobile/alerts/{alert_id}    Detalle completo de una alerta
 #   POST   /api/mobile/respond              Enviar acción de respuesta al agente
@@ -24,7 +20,9 @@
 # ROLES:
 #   Lectura (alertas, resumen, estado de comandos) → cualquier rol autenticado.
 #   POST /api/mobile/respond                       → solo 'admin' o 'soc_analyst'.
-#   GET  /api/mobile/tokens                        → solo 'admin'.
+#
+# NOTA: No hay notificaciones push (FCM). La app obtiene las alertas
+# haciendo polling a GET /api/mobile/alerts.
 
 import time
 import logging
@@ -48,7 +46,6 @@ router = APIRouter()
 # Roles autorizados a ejecutar respuesta activa desde el móvil.
 # Un 'viewer' puede consultar alertas, pero no actuar sobre un endpoint.
 _responder_only = Depends(require_role("admin", "soc_analyst"))
-_admin_only = Depends(require_role("admin"))
 
 
 # ---------------------------------------------------------------------------
@@ -70,228 +67,19 @@ def _require_auth(request: Request) -> dict:
 # Modelos de Request / Response
 # ---------------------------------------------------------------------------
 
-class RegisterTokenRequest(BaseModel):
-    """Cuerpo para registrar un token FCM."""
-    token: str
-    platform: str = "android"   # "android" | "ios"
-    label: Optional[str] = None  # Identificador del usuario/dispositivo (ej. username)
-
-
-class UnregisterTokenRequest(BaseModel):
-    """Cuerpo para eliminar un token FCM."""
-    token: str
-
-
 class RespondRequest(BaseModel):
     """
     Cuerpo para enviar una acción de respuesta activa al agente afectado.
-    Cuando la notificación push llega al móvil, la app debe enviar este
-    request si el usuario decide bloquear el ataque.
+    La app envía este request cuando el usuario decide bloquear el ataque
+    desde el detalle de una alerta.
     """
-    agent_id: str               # ID del agente afectado (viene en el payload de la push)
+    agent_id: str               # ID del agente afectado (viene en la alerta)
     action: str                 # Acción a ejecutar: "block_ip", "kill_process", "isolate"
     params: dict = {}           # Parámetros según la acción:
                                 #   block_ip:     {"ip": "x.x.x.x"}
                                 #   kill_process: {"pid": 1234, "name": "malware.exe"}
                                 #   isolate:      {}  (no requiere parámetros adicionales)
     alert_id: Optional[str] = None  # ID de la alerta que originó la acción (para trazabilidad)
-
-
-class TestPushRequest(BaseModel):
-    """Cuerpo para enviar una notificación push de prueba."""
-    token: str
-
-
-# ---------------------------------------------------------------------------
-# Endpoints — Token Management
-# ---------------------------------------------------------------------------
-
-@router.post("/mobile/register-token")
-async def register_token(request: Request, body: RegisterTokenRequest):
-    """
-    Registra el token FCM del dispositivo móvil en el servidor.
-
-    La app debe llamar este endpoint:
-    - Al iniciar sesión por primera vez.
-    - Al abrir la app (en caso de que el token FCM haya cambiado).
-    - Cuando Firebase notifica a la app que el token fue renovado
-      (método onTokenRefresh / onNewToken en Android).
-
-    El servidor almacenará el token en SQLite y lo usará para enviar
-    notificaciones cuando se genere una alerta de nivel >= 8 (High/Critical).
-
-    ---
-    **Request:**
-    ```json
-    {
-      "token": "firebase_fcm_token_string",
-      "platform": "android",
-      "label": "usuario@email.com"
-    }
-    ```
-
-    **Response:**
-    ```json
-    {
-      "status": "registered",
-      "message": "Token FCM registrado correctamente.",
-      "push_enabled": true
-    }
-    ```
-    """
-    _require_auth(request)
-    alert_store = request.app.state.alert_store
-
-    if not body.token or len(body.token) < 10:
-        raise HTTPException(status_code=400, detail="Token FCM inválido.")
-
-    alert_store.register_token(
-        token=body.token,
-        platform=body.platform,
-        label=body.label,
-    )
-
-    # Verificar si el push service está habilitado
-    push_service = getattr(request.app.state, "push_service", None)
-    push_enabled = push_service.is_enabled if push_service else False
-
-    logger.info(f"Token FCM registrado — platform={body.platform} label={body.label}")
-
-    return {
-        "status": "registered",
-        "message": "Token FCM registrado correctamente.",
-        "push_enabled": push_enabled,
-    }
-
-
-@router.delete("/mobile/unregister-token")
-async def unregister_token(request: Request, body: UnregisterTokenRequest):
-    """
-    Elimina el token FCM del dispositivo.
-
-    Llamar este endpoint cuando el usuario cierre sesión en la app.
-    Esto asegura que el dispositivo no siga recibiendo notificaciones
-    después del logout.
-
-    ---
-    **Request:**
-    ```json
-    {
-      "token": "firebase_fcm_token_string"
-    }
-    ```
-
-    **Response:**
-    ```json
-    {
-      "status": "unregistered",
-      "found": true
-    }
-    ```
-    """
-    _require_auth(request)
-    alert_store = request.app.state.alert_store
-
-    deleted = alert_store.delete_token(body.token)
-
-    return {
-        "status": "unregistered",
-        "found": deleted,
-    }
-
-
-@router.get("/mobile/tokens", dependencies=[_admin_only])
-async def list_tokens(request: Request):
-    """
-    Lista todos los tokens FCM registrados con sus metadatos.
-    Útil para administración y debugging desde la app o el dashboard.
-
-    **Requiere rol `admin`.**
-
-    ---
-    **Response:**
-    ```json
-    {
-      "total": 2,
-      "push_enabled": false,
-      "tokens": [
-        {
-          "token": "...abc123",
-          "platform": "android",
-          "label": "admin@horus.io",
-          "registered_at": 1690000000.0,
-          "last_used_at": 1690000000.0
-        }
-      ]
-    }
-    ```
-    """
-    _require_auth(request)
-    alert_store = request.app.state.alert_store
-    push_service = getattr(request.app.state, "push_service", None)
-
-    tokens = alert_store.get_tokens_detail()
-
-    # Truncar el token por seguridad (mostrar solo los últimos 8 chars)
-    for t in tokens:
-        full_token = t["token"]
-        t["token_preview"] = f"...{full_token[-8:]}"
-        del t["token"]  # No exponer el token completo en el listado
-
-    return {
-        "total": len(tokens),
-        "push_enabled": push_service.is_enabled if push_service else False,
-        "tokens": tokens,
-    }
-
-
-@router.post("/mobile/test-push")
-async def test_push(request: Request, body: TestPushRequest):
-    """
-    Envía una notificación push de prueba a un token específico.
-    Usa esto para verificar que la integración con Firebase funciona
-    correctamente antes de ir a producción.
-
-    Requiere que firebase.enabled=true en config.yaml.
-
-    ---
-    **Request:**
-    ```json
-    {
-      "token": "firebase_fcm_token_string"
-    }
-    ```
-
-    **Response (éxito):**
-    ```json
-    {
-      "success": true,
-      "message_id": "projects/your-project/messages/12345",
-      "message": "Push enviado correctamente."
-    }
-    ```
-
-    **Response (Firebase no configurado):**
-    ```json
-    {
-      "success": false,
-      "message": "Firebase no está habilitado. Configura firebase.enabled=true en config.yaml."
-    }
-    ```
-    """
-    _require_auth(request)
-    push_service = getattr(request.app.state, "push_service", None)
-
-    if not push_service:
-        raise HTTPException(status_code=503, detail="PushService no inicializado.")
-
-    result = push_service.send_test_notification(body.token)
-
-    return {
-        "success": result.get("success", False),
-        "message_id": result.get("message_id"),
-        "message": "Push enviado correctamente." if result.get("success") else result.get("message", result.get("error")),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +97,10 @@ async def get_mobile_alerts(
 ):
     """
     Retorna las alertas más recientes optimizadas para la pantalla de la app móvil.
+
+    Este es el único canal de entrega de alertas para la app: no hay push.
+    La app debe hacer polling a este endpoint (cada 10-15 s con offset=0)
+    mientras la pantalla de alertas esté visible.
 
     Diferencias con /api/alerts:
     - Límite por defecto menor (20 en vez de 50) para menor uso de datos.
@@ -399,12 +191,12 @@ async def get_mobile_alert_detail(request: Request, alert_id: str):
     """
     Retorna el detalle completo de una alerta específica.
 
-    La app debe llamar este endpoint cuando el usuario toca una notificación
-    push para mostrar la pantalla de detalle con todas las opciones de respuesta.
+    La app debe llamar este endpoint cuando el usuario toca una alerta de la
+    lista para mostrar la pantalla de detalle con las opciones de respuesta.
 
     ---
     **Path param:**
-    - `alert_id`: ID de la alerta (viene en el payload data de la notificación push)
+    - `alert_id`: ID de la alerta (campo `id` de GET /mobile/alerts)
 
     **Response:**
     ```json
@@ -459,8 +251,8 @@ async def mobile_respond(
     Envía un comando de respuesta activa al agente afectado.
 
     Este es el endpoint principal de acción desde la app móvil.
-    Cuando la notificación push llega al dispositivo del operador y decide
-    actuar, la app envía este request.
+    Cuando el operador ve una alerta en la lista y decide actuar,
+    la app envía este request.
 
     El servidor encola el comando y el agente (instalado en el endpoint
     afectado) lo recogerá en su próximo ciclo de polling y lo ejecutará.
@@ -670,10 +462,6 @@ async def get_dashboard_summary(request: Request):
         "active": 4,
         "disconnected": 1
       },
-      "push": {
-        "enabled": false,
-        "registered_devices": 1
-      },
       "commands": {
         "pending": 0
       },
@@ -693,7 +481,6 @@ async def get_dashboard_summary(request: Request):
 
     alert_store = request.app.state.alert_store
     agents = request.app.state.agents
-    push_service = getattr(request.app.state, "push_service", None)
 
     # Calcular status de agentes
     now = time.time()
@@ -703,19 +490,12 @@ async def get_dashboard_summary(request: Request):
         if now - a.get("last_seen", 0) <= AGENT_TIMEOUT
     )
 
-    # Conteo de tokens registrados
-    tokens = alert_store.get_all_tokens()
-
     return {
         "alerts": alert_store.get_alert_stats(),
         "agents": {
             "total": len(agents),
             "active": active,
             "disconnected": len(agents) - active,
-        },
-        "push": {
-            "enabled": push_service.is_enabled if push_service else False,
-            "registered_devices": len(tokens),
         },
         "commands": {
             "pending": alert_store.count_pending_commands(),
